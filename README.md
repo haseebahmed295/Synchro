@@ -1,36 +1,125 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Synchro - AI-Native CASE Tool
+
+Synchro is an "Active Architect" Computer-Aided Software Engineering (CASE) tool that leverages an Agentic AI Mesh to automate transitions between Software Development Lifecycle (SDLC) phases. The system maintains bidirectional traceability between Requirements, Design Diagrams, and Code through intelligent agents that react to changes in real-time.
+
+## Features
+
+- **Intelligent Requirements Ingestion**: Extract requirements from text, images (OCR), and PDF documents
+- **Automated Diagram Generation**: Generate UML Class, Sequence, and ERD diagrams from requirements
+- **Bidirectional Synchronization**: Keep requirements, diagrams, and code in sync automatically
+- **Code Generation & Reverse Engineering**: Generate boilerplate code from diagrams and extract diagrams from existing code
+- **Real-time Collaboration**: See changes from team members in real-time
+- **Traceability Management**: Maintain complete traceability between all artifacts
+- **Governance & Validation**: Automated quality checks and Architecture Decision Records (ADRs)
+
+## Tech Stack
+
+- **Frontend & Backend**: Next.js 16.2+ (App Router, API Routes)
+- **Styling**: Tailwind CSS, Shadcn/UI
+- **Canvas**: React Flow for diagram visualization
+- **Database**: Supabase Cloud (PostgreSQL, Auth, Realtime)
+- **Intelligence**: LangGraph (agent orchestration), Vercel AI SDK
+- **Type Safety**: TypeScript strict mode, Zod validation
+- **LLMs**: Claude Sonnet 4.6, Gemini 3 Flash, GPT-5.2, DeepSeek-V3
+- **Vector DB**: Pinecone or Qdrant Cloud (semantic search)
+- **Deployment**: Vercel
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
 
+- Node.js 20+ and npm
+- Supabase Cloud account
+- AI API keys (Anthropic, Google AI, OpenAI, DeepSeek)
+- Vector database account (Pinecone or Qdrant)
+
+### Installation
+
+1. Clone the repository:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone <repository-url>
+cd synchro
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Install dependencies:
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Set up environment variables:
+```bash
+cp .env.example .env.local
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Edit `.env.local` and add your API keys and configuration.
 
-## Learn More
+4. Run the development server:
+```bash
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+Open [http://localhost:3000](http://localhost:3000) to see the application.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Available Scripts
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm start` - Start production server
+- `npm run lint` - Run Biome linter
+- `npm run lint:fix` - Fix linting issues
+- `npm run format` - Format code with Prettier
+- `npm run format:check` - Check code formatting
+- `npm run type-check` - Run TypeScript type checking
 
-## Deploy on Vercel
+## Project Structure
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+synchro/
+├── app/                    # Next.js App Router pages
+│   ├── api/               # API routes for webhooks and agent orchestration
+│   ├── layout.tsx         # Root layout
+│   └── page.tsx           # Home page
+├── components/            # React components
+│   └── ui/               # Shadcn/UI components
+├── lib/                   # Utility functions and shared code
+├── public/               # Static assets
+├── .env.local            # Environment variables (not committed)
+├── .env.example          # Environment variables template
+├── biome.json            # Biome linter configuration
+├── .prettierrc           # Prettier configuration
+├── tsconfig.json         # TypeScript configuration
+└── package.json          # Dependencies and scripts
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Architecture
+
+Synchro follows a hub-and-spoke architecture with Supabase as the central data hub. All modules are loosely coupled and communicate asynchronously through database changes and webhooks.
+
+### Key Components
+
+1. **Module A: The Analyst** - Ingests and structures requirements from various sources
+2. **Module B: The Architect** - Generates and maintains design diagrams
+3. **Module C: The Implementer** - Generates code and performs reverse engineering
+4. **Module D: The Judge** - Validates consistency and enforces governance
+
+## Development Guidelines
+
+- Follow TypeScript strict mode conventions
+- Use Biome for linting and Prettier for formatting
+- Write tests for all new features
+- Maintain 80% code coverage target
+- Follow the spec-driven development workflow in `.kiro/specs/synchro/`
+
+## Documentation
+
+- [Requirements Document](.kiro/specs/synchro/requirements.md)
+- [Design Document](.kiro/specs/synchro/design.md)
+- [Implementation Tasks](.kiro/specs/synchro/tasks.md)
+
+## License
+
+[Add your license here]
+
+## Contributing
+
+[Add contribution guidelines here]
