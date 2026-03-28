@@ -188,3 +188,16 @@ After applying migrations:
 3. Configure Supabase client in Next.js (see task 2.1)
 4. Test database connection and RLS policies
 5. Proceed to task 3: Next.js frontend foundation
+
+
+### 20260328000001_setup_webhooks.sql
+Creates database triggers for webhook notifications:
+- `notify_artifact_change()` - Trigger function for artifact changes
+- INSERT trigger on artifacts table
+- UPDATE trigger on artifacts table
+- DELETE trigger on artifacts table
+
+**Requirements Covered**: 18.1
+
+**Note**: After running this migration, you must configure webhooks in Supabase Dashboard. See [../WEBHOOK_SETUP.md](../WEBHOOK_SETUP.md) for detailed instructions.
+

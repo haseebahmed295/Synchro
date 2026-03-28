@@ -40,63 +40,63 @@ This implementation plan follows a phased approach to build Synchro, an AI-nativ
     - _Requirements: 27.1_
 
 
-- [-] 3. Set up Next.js frontend foundation
-  - [ ] 3.1 Initialize Next.js 16.2+ project with TypeScript
+- [x] 3. Set up Next.js frontend foundation
+  - [x] 3.1 Initialize Next.js 16.2+ project with TypeScript
     - Create Next.js app with App Router
     - Configure Tailwind CSS and Shadcn/UI
     - Set up Supabase client and authentication helpers
     - _Requirements: 33.3, 1.1_
   
-  - [ ] 3.2 Implement authentication flow
+  - [x] 3.2 Implement authentication flow
     - Create login and signup pages using Supabase Auth
     - Implement JWT token handling and session management
     - Create protected route middleware
     - _Requirements: 1.1, 1.2_
   
-  - [ ] 3.3 Create project dashboard layout
+  - [x] 3.3 Create project dashboard layout
     - Build main dashboard page with project list
     - Implement project creation form
     - Add project selection and navigation
     - _Requirements: 2.1, 2.3_
 
-- [ ] 4. Set up Next.js API Routes for webhook handling
-  - [ ] 4.1 Create API route for Supabase webhooks
+- [x] 4. Set up Next.js API Routes for webhook handling
+  - [x] 4.1 Create API route for Supabase webhooks
     - Create /app/api/webhooks/supabase/route.ts
     - Parse webhook payload (event_type, table, record, old_record)
     - Implement basic event logging
     - _Requirements: 18.1, 18.2_
   
-  - [ ] 4.2 Configure Supabase Cloud webhooks
+  - [x] 4.2 Configure Supabase Cloud webhooks
     - Set up database triggers for INSERT, UPDATE, DELETE on artifacts table
     - Configure webhook URL pointing to Vercel deployment
     - Implement webhook signature verification
     - _Requirements: 18.1_
 
-- [ ] 5. Implement basic requirements management
-  - [ ] 5.1 Create requirements table UI component
+- [x] 5. Implement basic requirements management
+  - [x] 5.1 Create requirements table UI component
     - Build editable table with columns: ID, title, type, priority, status
     - Implement cell editing with debounced updates
     - Add filtering and sorting functionality
     - _Requirements: 25.1, 25.2, 25.4, 25.5_
   
-  - [ ] 5.2 Implement requirement CRUD operations
+  - [x] 5.2 Implement requirement CRUD operations
     - Create API functions for creating, reading, updating, deleting requirements
     - Store requirements in artifacts table with type='requirement'
     - Use stable key JSON schema for requirement content
     - _Requirements: 3.6, 6.3_
   
-  - [ ] 5.3 Set up Supabase Realtime subscriptions
+  - [x] 5.3 Set up Supabase Realtime subscriptions
     - Subscribe to artifacts table changes for current project
     - Update UI when realtime events are received
     - _Requirements: 17.2, 17.3_
 
-- [ ] 6. Checkpoint - Ensure all tests pass
+- [x] 6. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Phase 2: Intelligent Ingestion
 
-- [ ] 7. Set up LangGraph.js agent orchestration framework
-  - [ ] 7.1 Initialize LangGraph.js state machine
+- [-] 7. Set up LangGraph.js agent orchestration framework
+  - [-] 7.1 Initialize LangGraph.js state machine
     - Install @langchain/langgraph package
     - Define LangGraph state schema with iteration_count field
     - Create agent router to dispatch events to appropriate agents
