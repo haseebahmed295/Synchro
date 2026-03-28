@@ -6,7 +6,7 @@ This implementation plan follows a phased approach to build Synchro, an AI-nativ
 
 ## Phase 1: The Skeleton (MVP)
 
-- [-] 1. Set up project infrastructure and development environment
+- [x] 1. Set up project infrastructure and development environment
   - Initialize Next.js 16.2+ project with TypeScript and App Router
   - Configure Tailwind CSS and Shadcn/UI
   - Set up environment variables for Supabase Cloud and AI API keys
@@ -14,33 +14,33 @@ This implementation plan follows a phased approach to build Synchro, an AI-nativ
   - Initialize Git repository with .gitignore
   - _Requirements: 34.2, 30.1_
 
-- [ ] 2. Implement Supabase Cloud database schema and migrations
-  - [ ] 2.1 Create Supabase Cloud project and configure connection
+- [x] 2. Implement Supabase Cloud database schema and migrations
+  - [x] 2.1 Create Supabase Cloud project and configure connection
     - Sign up for Supabase Cloud and create new project
     - Copy connection strings and API keys to .env.local
     - Install @supabase/supabase-js and @supabase/ssr packages
     - Configure Supabase client for Next.js App Router
     - _Requirements: 1.1, 30.1_
   
-  - [ ] 2.2 Create core database tables (projects, artifacts, change_log, traceability_links)
+  - [x] 2.2 Create core database tables (projects, artifacts, change_log, traceability_links)
     - Write SQL migration for projects table with UUID, name, description, version, timestamps, owner_id
     - Write SQL migration for artifacts table with UUID, project_id, type enum, content jsonb, metadata jsonb, version integer, timestamps
     - Write SQL migration for change_log table with UUID, artifact_id, patch jsonb, applied_at, applied_by, agent_type
     - Write SQL migration for traceability_links table with UUID, source_id, target_id, link_type enum, confidence float, timestamps
     - _Requirements: 2.1, 2.2, 14.1, 24.2_
   
-  - [ ] 2.2 Configure Row-Level Security (RLS) policies
+  - [x] 2.2 Configure Row-Level Security (RLS) policies
     - Write RLS policy for projects table to restrict access to owners and members
     - Write RLS policies for artifacts, change_log, and traceability_links based on project access
     - _Requirements: 1.2, 1.3_
   
-  - [ ] 2.3 Set up database indexes for performance
+  - [x] 2.3 Set up database indexes for performance
     - Create indexes on foreign keys (project_id, artifact_id, source_id, target_id, owner_id)
     - Create indexes on frequently queried fields (type, status, created_at)
     - _Requirements: 27.1_
 
 
-- [ ] 3. Set up Next.js frontend foundation
+- [-] 3. Set up Next.js frontend foundation
   - [ ] 3.1 Initialize Next.js 16.2+ project with TypeScript
     - Create Next.js app with App Router
     - Configure Tailwind CSS and Shadcn/UI
