@@ -4,31 +4,33 @@
  * Requirements: 8.1-8.6, 21.1-21.8
  */
 
-import { generateAIObject, generateAIText } from '../ai/client'
-import { z } from 'zod'
-import type { Diagram, DiagramEdge } from '../types/diagram'
-import type { ValidationIssue } from './types'
+import { z } from "zod";
+import { generateAIObject, generateAIText } from "../ai/client";
+import type { Diagram, DiagramEdge } from "../types/diagram";
+import type { ValidationIssue } from "./types";
 
 /**
  * Validation result schema for AI-powered validation
  */
 const ValidationResultSchema = z.object({
-  issues: z.array(z.object({
-    severity: z.enum(['error', 'warning', 'info']),
-    message: z.string(),
-    affectedArtifacts: z.array(z.string()),
-    suggestedFix: z.string().optional(),
-  })),
+  issues: z.array(
+    z.object({
+      severity: z.enum(["error", "warning", "info"]),
+      message: z.string(),
+      affectedArtifacts: z.array(z.string()),
+      suggestedFix: z.string().optional(),
+    }),
+  ),
   reasoning: z.string(),
-})
+});
 
 /**
  * Refinement feedback schema
  */
 export interface RefinementFeedback {
-  issues: ValidationIssue[]
-  suggestions: string[]
-  iterationCount: number
+  issues: ValidationIssue[];
+  suggestions: string[];
+  iterationCount: number;
 }
 
 /**
@@ -36,42 +38,46 @@ export interface RefinementFeedback {
  * Responsible for validation, governance, and quality control
  */
 export class JudgeAgent {
-  private readonly MAX_REFINEMENT_ITERATIONS = 2
+  private readonly MAX_REFINEMENT_ITERATIONS = 2;
 
   /**
    * Validate diagram consistency
    * Requirements: 8.1, 8.3, 8.4, 8.6
    */
-  async validateDiagramConsistency(diagram: Diagram): Promise<ValidationIssue[]> {
-    const issues: ValidationIssue[] = []
+  async validateDiagramConsistency(
+    diagram: Diagram,
+  ): Promise<ValidationIssue[]> {
+    const issues: ValidationIssue[] = [];
 
     // Check for orphaned nodes (nodes with no connections)
-    const orphanedNodes = this.detectOrphanedNodes(diagram)
+    const orphanedNodes = this.detectOrphanedNodes(diagram);
     if (orphanedNodes.length > 0) {
       issues.push({
-        severity: 'warning',
+        severity: "warning",
         message: `Found ${orphanedNodes.length} orphaned node(s) with no connections`,
         affectedArtifacts: orphanedNodes,
-        suggestedFix: 'Consider adding relationships to connect these nodes or removing them if they are not needed',
-      })
+        suggestedFix:
+          "Consider adding relationships to connect these nodes or removing them if they are not needed",
+      });
     }
 
     // Check for circular inheritance
-    const inheritanceCycles = this.detectInheritanceCycles(diagram)
+    const inheritanceCycles = this.detectInheritanceCycles(diagram);
     if (inheritanceCycles.length > 0) {
       issues.push({
-        severity: 'error',
-        message: 'Detected circular inheritance dependencies',
+        severity: "error",
+        message: "Detected circular inheritance dependencies",
         affectedArtifacts: inheritanceCycles.flat(),
-        suggestedFix: 'Break the inheritance cycle by removing one of the inheritance relationships',
-      })
+        suggestedFix:
+          "Break the inheritance cycle by removing one of the inheritance relationships",
+      });
     }
 
     // Use GPT-5.2 for complex UML validation
-    const aiValidationIssues = await this.performComplexUMLValidation(diagram)
-    issues.push(...aiValidationIssues)
+    const aiValidationIssues = await this.performComplexUMLValidation(diagram);
+    issues.push(...aiValidationIssues);
 
-    return issues
+    return issues;
   }
 
   /**
@@ -79,20 +85,20 @@ export class JudgeAgent {
    * Requirements: 8.3
    */
   private detectOrphanedNodes(diagram: Diagram): string[] {
-    const connectedNodeIds = new Set<string>()
+    const connectedNodeIds = new Set<string>();
 
     // Collect all nodes that have at least one edge
     for (const edge of diagram.edges) {
-      connectedNodeIds.add(edge.source)
-      connectedNodeIds.add(edge.target)
+      connectedNodeIds.add(edge.source);
+      connectedNodeIds.add(edge.target);
     }
 
     // Find nodes that are not connected
     const orphanedNodes = diagram.nodes
-      .filter(node => !connectedNodeIds.has(node.id))
-      .map(node => node.id)
+      .filter((node) => !connectedNodeIds.has(node.id))
+      .map((node) => node.id);
 
-    return orphanedNodes
+    return orphanedNodes;
   }
 
   /**
@@ -100,64 +106,66 @@ export class JudgeAgent {
    * Requirements: 8.4
    */
   private detectInheritanceCycles(diagram: Diagram): string[][] {
-    const cycles: string[][] = []
+    const cycles: string[][] = [];
 
     // Build adjacency list for inheritance edges only
-    const inheritanceGraph = new Map<string, string[]>()
+    const inheritanceGraph = new Map<string, string[]>();
     for (const edge of diagram.edges) {
-      if (edge.type === 'inheritance') {
+      if (edge.type === "inheritance") {
         if (!inheritanceGraph.has(edge.source)) {
-          inheritanceGraph.set(edge.source, [])
+          inheritanceGraph.set(edge.source, []);
         }
-        inheritanceGraph.get(edge.source)!.push(edge.target)
+        inheritanceGraph.get(edge.source)!.push(edge.target);
       }
     }
 
     // DFS to detect cycles
-    const visited = new Set<string>()
-    const recursionStack = new Set<string>()
-    const currentPath: string[] = []
+    const visited = new Set<string>();
+    const recursionStack = new Set<string>();
+    const currentPath: string[] = [];
 
     const dfs = (nodeId: string): boolean => {
-      visited.add(nodeId)
-      recursionStack.add(nodeId)
-      currentPath.push(nodeId)
+      visited.add(nodeId);
+      recursionStack.add(nodeId);
+      currentPath.push(nodeId);
 
-      const neighbors = inheritanceGraph.get(nodeId) || []
+      const neighbors = inheritanceGraph.get(nodeId) || [];
       for (const neighbor of neighbors) {
         if (!visited.has(neighbor)) {
           if (dfs(neighbor)) {
-            return true
+            return true;
           }
         } else if (recursionStack.has(neighbor)) {
           // Found a cycle
-          const cycleStartIndex = currentPath.indexOf(neighbor)
-          const cycle = currentPath.slice(cycleStartIndex)
-          cycles.push([...cycle, neighbor]) // Include the neighbor to close the cycle
-          return true
+          const cycleStartIndex = currentPath.indexOf(neighbor);
+          const cycle = currentPath.slice(cycleStartIndex);
+          cycles.push([...cycle, neighbor]); // Include the neighbor to close the cycle
+          return true;
         }
       }
 
-      recursionStack.delete(nodeId)
-      currentPath.pop()
-      return false
-    }
+      recursionStack.delete(nodeId);
+      currentPath.pop();
+      return false;
+    };
 
     // Check all nodes
     for (const node of diagram.nodes) {
       if (!visited.has(node.id)) {
-        dfs(node.id)
+        dfs(node.id);
       }
     }
 
-    return cycles
+    return cycles;
   }
 
   /**
    * Perform complex UML validation using GPT-5.2
    * Requirements: 8.6
    */
-  private async performComplexUMLValidation(diagram: Diagram): Promise<ValidationIssue[]> {
+  private async performComplexUMLValidation(
+    diagram: Diagram,
+  ): Promise<ValidationIssue[]> {
     const systemPrompt = `You are an expert UML validator specializing in complex diagram analysis.
 
 Your task is to validate UML diagrams for correctness and best practices.
@@ -176,40 +184,48 @@ For each issue found:
 - List affected node/edge IDs
 - Suggest a specific fix
 
-Only report genuine issues. If the diagram is valid, return an empty issues array.`
+Only report genuine issues. If the diagram is valid, return an empty issues array.`;
 
     const prompt = `Validate this ${diagram.type} diagram:
 
 **Nodes:**
-${diagram.nodes.map(node => `
+${diagram.nodes
+  .map(
+    (node) => `
 - ${node.id} (${node.type}): ${node.data.label}
-  ${node.data.attributes ? `Attributes: ${node.data.attributes.join(', ')}` : ''}
-  ${node.data.methods ? `Methods: ${node.data.methods.join(', ')}` : ''}
-  ${node.data.stereotype ? `Stereotype: ${node.data.stereotype}` : ''}
-`).join('\n')}
+  ${node.data.attributes ? `Attributes: ${node.data.attributes.join(", ")}` : ""}
+  ${node.data.methods ? `Methods: ${node.data.methods.join(", ")}` : ""}
+  ${node.data.stereotype ? `Stereotype: ${node.data.stereotype}` : ""}
+`,
+  )
+  .join("\n")}
 
 **Edges:**
-${diagram.edges.map(edge => `
+${diagram.edges
+  .map(
+    (edge) => `
 - ${edge.id}: ${edge.source} --[${edge.type}]--> ${edge.target}
-  ${edge.label ? `Label: ${edge.label}` : ''}
-  ${edge.multiplicity ? `Multiplicity: ${edge.multiplicity.source || '*'} to ${edge.multiplicity.target || '*'}` : ''}
-`).join('\n')}
+  ${edge.label ? `Label: ${edge.label}` : ""}
+  ${edge.multiplicity ? `Multiplicity: ${edge.multiplicity.source || "*"} to ${edge.multiplicity.target || "*"}` : ""}
+`,
+  )
+  .join("\n")}
 
-Return a JSON object with issues array and reasoning.`
+Return a JSON object with issues array and reasoning.`;
 
     try {
       const result = await generateAIObject(
-        'validation',
+        "validation",
         prompt,
         ValidationResultSchema,
-        systemPrompt
-      )
+        systemPrompt,
+      );
 
-      return result.issues
+      return result.issues;
     } catch (error) {
-      console.error('Complex UML validation failed', error)
+      console.error("Complex UML validation failed", error);
       // Return empty array on failure - don't block the workflow
-      return []
+      return [];
     }
   }
 
@@ -221,70 +237,91 @@ Return a JSON object with issues array and reasoning.`
     output: T,
     validator: (output: T) => Promise<ValidationIssue[]>,
     refiner: (output: T, feedback: RefinementFeedback) => Promise<T>,
-    context: string
-  ): Promise<{ output: T; issues: ValidationIssue[]; requiresEscalation: boolean; reasoningLog: string[] }> {
-    const reasoningLog: string[] = []
-    let currentOutput = output
-    let iterationCount = 0
+    context: string,
+  ): Promise<{
+    output: T;
+    issues: ValidationIssue[];
+    requiresEscalation: boolean;
+    reasoningLog: string[];
+  }> {
+    const reasoningLog: string[] = [];
+    let currentOutput = output;
+    let iterationCount = 0;
 
-    reasoningLog.push(`Starting validation for: ${context}`)
+    reasoningLog.push(`Starting validation for: ${context}`);
 
     while (iterationCount < this.MAX_REFINEMENT_ITERATIONS) {
       // Validate current output
-      const issues = await validator(currentOutput)
+      const issues = await validator(currentOutput);
 
       // Check if there are critical errors
-      const criticalErrors = issues.filter(issue => issue.severity === 'error')
+      const criticalErrors = issues.filter(
+        (issue) => issue.severity === "error",
+      );
 
       if (criticalErrors.length === 0) {
-        reasoningLog.push(`Validation passed on iteration ${iterationCount + 1}`)
+        reasoningLog.push(
+          `Validation passed on iteration ${iterationCount + 1}`,
+        );
         return {
           output: currentOutput,
           issues,
           requiresEscalation: false,
           reasoningLog,
-        }
+        };
       }
 
       // Log the issues found
-      reasoningLog.push(`Iteration ${iterationCount + 1}: Found ${criticalErrors.length} critical error(s)`)
+      reasoningLog.push(
+        `Iteration ${iterationCount + 1}: Found ${criticalErrors.length} critical error(s)`,
+      );
       for (const error of criticalErrors) {
-        reasoningLog.push(`  - ${error.message}`)
+        reasoningLog.push(`  - ${error.message}`);
       }
 
       // Prepare feedback for refinement
       const feedback: RefinementFeedback = {
         issues: criticalErrors,
         suggestions: criticalErrors
-          .filter(e => e.suggestedFix)
-          .map(e => e.suggestedFix!),
+          .filter((e) => e.suggestedFix)
+          .map((e) => e.suggestedFix!),
         iterationCount: iterationCount + 1,
-      }
+      };
 
       // Attempt refinement
       try {
-        reasoningLog.push(`Attempting refinement iteration ${iterationCount + 1}`)
-        currentOutput = await refiner(currentOutput, feedback)
-        iterationCount++
+        reasoningLog.push(
+          `Attempting refinement iteration ${iterationCount + 1}`,
+        );
+        currentOutput = await refiner(currentOutput, feedback);
+        iterationCount++;
       } catch (error) {
-        reasoningLog.push(`Refinement failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
-        break
+        reasoningLog.push(
+          `Refinement failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        );
+        break;
       }
     }
 
     // If we reach here, validation failed after max iterations
-    const finalIssues = await validator(currentOutput)
-    const criticalErrors = finalIssues.filter(issue => issue.severity === 'error')
+    const finalIssues = await validator(currentOutput);
+    const criticalErrors = finalIssues.filter(
+      (issue) => issue.severity === "error",
+    );
 
-    reasoningLog.push(`Validation failed after ${this.MAX_REFINEMENT_ITERATIONS} refinement iterations`)
-    reasoningLog.push(`Escalating to user with ${criticalErrors.length} unresolved error(s)`)
+    reasoningLog.push(
+      `Validation failed after ${this.MAX_REFINEMENT_ITERATIONS} refinement iterations`,
+    );
+    reasoningLog.push(
+      `Escalating to user with ${criticalErrors.length} unresolved error(s)`,
+    );
 
     return {
       output: currentOutput,
       issues: finalIssues,
       requiresEscalation: true,
       reasoningLog,
-    }
+    };
   }
 
   /**
@@ -293,14 +330,29 @@ Return a JSON object with issues array and reasoning.`
    */
   async validateArchitectOutput(
     diagram: Diagram,
-    refineCallback: (diagram: Diagram, feedback: RefinementFeedback) => Promise<Diagram>
-  ): Promise<{ diagram: Diagram; issues: ValidationIssue[]; requiresEscalation: boolean; reasoningLog: string[] }> {
-    return this.validateWithRefinement(
+    refineCallback: (
+      diagram: Diagram,
+      feedback: RefinementFeedback,
+    ) => Promise<Diagram>,
+  ): Promise<{
+    diagram: Diagram;
+    issues: ValidationIssue[];
+    requiresEscalation: boolean;
+    reasoningLog: string[];
+  }> {
+    const result = await this.validateWithRefinement(
       diagram,
       (d) => this.validateDiagramConsistency(d),
       refineCallback,
-      `Architect diagram generation (${diagram.type})`
-    )
+      `Architect diagram generation (${diagram.type})`,
+    );
+
+    return {
+      diagram: result.output,
+      issues: result.issues,
+      requiresEscalation: result.requiresEscalation,
+      reasoningLog: result.reasoningLog,
+    };
   }
 
   /**
@@ -310,19 +362,23 @@ Return a JSON object with issues array and reasoning.`
   generateRefinementPrompt(feedback: RefinementFeedback): string {
     const prompt = `The diagram validation found ${feedback.issues.length} issue(s) that need to be addressed:
 
-${feedback.issues.map((issue, idx) => `
+${feedback.issues
+  .map(
+    (issue, idx) => `
 ${idx + 1}. **${issue.severity.toUpperCase()}**: ${issue.message}
-   Affected: ${issue.affectedArtifacts.join(', ')}
-   ${issue.suggestedFix ? `Suggested fix: ${issue.suggestedFix}` : ''}
-`).join('\n')}
+   Affected: ${issue.affectedArtifacts.join(", ")}
+   ${issue.suggestedFix ? `Suggested fix: ${issue.suggestedFix}` : ""}
+`,
+  )
+  .join("\n")}
 
 This is refinement iteration ${feedback.iterationCount} of ${this.MAX_REFINEMENT_ITERATIONS}.
 
 Please revise the diagram to address these issues. Focus on:
-${feedback.suggestions.map(s => `- ${s}`).join('\n')}
+${feedback.suggestions.map((s) => `- ${s}`).join("\n")}
 
-Return the corrected diagram with the same structure.`
+Return the corrected diagram with the same structure.`;
 
-    return prompt
+    return prompt;
   }
 }

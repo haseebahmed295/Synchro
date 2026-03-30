@@ -2,27 +2,27 @@
  * Agent Module Exports
  */
 
-export { routeEvent, dispatchToAgent } from './router'
+export { AnalystAgent, type Requirement, RequirementSchema } from "./analyst";
+export { ArchitectAgent } from "./architect";
+export type { JSONPatch, JSONPatchOperation } from "./json-patch";
+export { applyPatch } from "./json-patch";
 
-export { initializeState, createAgentGraph, checkIterationLimit, shouldContinue } from './state-machine'
-
-export { AnalystAgent, RequirementSchema, type Requirement } from './analyst'
-
-export { ArchitectAgent } from './architect'
-
-export { JudgeAgent, type RefinementFeedback } from './judge'
-
+export { JudgeAgent, type RefinementFeedback } from "./judge";
+export { dispatchToAgent, routeEvent } from "./router";
+export {
+  checkIterationLimit,
+  createAgentGraph,
+  initializeState,
+  shouldContinue,
+} from "./state-machine";
 export type {
+  AgentError,
+  AgentResponse,
+  AgentState,
   AgentType,
   ArtifactType,
   LinkType,
-  AgentState,
   TraceabilityLink,
   ValidationIssue,
-  AgentError,
-  AgentResponse,
   WebhookPayload,
-} from './types'
-
-export type { JSONPatch, JSONPatchOperation } from './json-patch'
-export { applyPatch } from './json-patch'
+} from "./types";

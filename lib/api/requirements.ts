@@ -63,6 +63,17 @@ export async function createRequirement(
 ): Promise<Requirement> {
   const supabase = createClient();
 
+  // Check auth state
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) {
+    console.error("Session error:", sessionError);
+    throw new Error(`Authentication error: ${sessionError.message}`);
+  }
+  if (!session) {
+    console.error("No session found");
+    throw new Error("No authenticated session. Please log in again.");
+  }
+
   // Generate unique requirement ID
   const reqId = `REQ_${Date.now().toString(36).toUpperCase()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
@@ -81,6 +92,8 @@ export async function createRequirement(
     },
   };
 
+  console.log("Inserting requirement:", { project_id: projectId, type: "requirement", content: requirementContent });
+
   const { data, error } = await supabase
     .from("artifacts")
     .insert({
@@ -95,7 +108,7 @@ export async function createRequirement(
 
   if (error) {
     console.error("Error creating requirement:", error);
-    throw error;
+    throw new Error(`Failed to create requirement: ${error.message}`);
   }
 
   return data as Requirement;

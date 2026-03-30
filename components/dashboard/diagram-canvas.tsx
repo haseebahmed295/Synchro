@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 /**
  * Diagram Canvas Component
@@ -7,28 +7,28 @@
  * Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 26.1, 26.2, 26.3
  */
 
-import { useCallback, useMemo, memo, useState } from 'react';
 import {
-  ReactFlow,
-  Background,
-  Controls,
-  MiniMap,
-  Panel,
-  Node,
-  Edge,
-  NodeChange,
-  EdgeChange,
-  Connection,
-  applyNodeChanges,
-  applyEdgeChanges,
   addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+  Background,
   BackgroundVariant,
-  useReactFlow,
+  type Connection,
+  Controls,
+  type Edge,
+  type EdgeChange,
+  MiniMap,
+  type Node,
+  type NodeChange,
+  Panel,
+  ReactFlow,
   ReactFlowProvider,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-import { Button } from '@/components/ui/button';
-import type { DiagramNode, DiagramEdge, EdgeType } from '@/lib/types/diagram';
+  useReactFlow,
+} from "@xyflow/react";
+import { memo, useCallback, useMemo, useState } from "react";
+import "@xyflow/react/dist/style.css";
+import { Button } from "@/components/ui/button";
+import type { DiagramEdge, DiagramNode, EdgeType } from "@/lib/types/diagram";
 
 // Performance threshold for lazy loading (Requirement 26.1)
 const LAZY_LOAD_THRESHOLD = 100;
@@ -47,11 +47,11 @@ interface DiagramCanvasProps {
  */
 function isValidEdgeType(type: string): type is EdgeType {
   const validTypes: EdgeType[] = [
-    'association',
-    'inheritance',
-    'dependency',
-    'composition',
-    'aggregation',
+    "association",
+    "inheritance",
+    "dependency",
+    "composition",
+    "aggregation",
   ];
   return validTypes.includes(type as EdgeType);
 }
@@ -61,11 +61,11 @@ function isValidEdgeType(type: string): type is EdgeType {
  * Memoized for performance (Requirement 26.3)
  * Optimized rendering for large diagrams
  */
-const NodeContent = memo(function NodeContent({ 
-  label, 
-  stereotype, 
-  attributes, 
-  methods 
+const NodeContent = memo(function NodeContent({
+  label,
+  stereotype,
+  attributes,
+  methods,
 }: {
   label: string;
   stereotype?: string;
@@ -105,7 +105,7 @@ const NodeContent = memo(function NodeContent({
 function convertToFlowNodes(diagramNodes: DiagramNode[]): Node[] {
   return diagramNodes.map((node) => ({
     id: node.id,
-    type: 'default',
+    type: "default",
     position: node.position,
     data: {
       label: (
@@ -132,7 +132,7 @@ function convertToFlowEdges(diagramEdges: DiagramEdge[]): Edge[] {
     target: edge.target,
     type: getEdgeType(edge.type),
     label: edge.label,
-    animated: edge.type === 'dependency',
+    animated: edge.type === "dependency",
   }));
 }
 
@@ -141,13 +141,13 @@ function convertToFlowEdges(diagramEdges: DiagramEdge[]): Edge[] {
  */
 function getEdgeType(type: string): string {
   switch (type) {
-    case 'inheritance':
-      return 'step';
-    case 'composition':
-    case 'aggregation':
-      return 'smoothstep';
+    case "inheritance":
+      return "step";
+    case "composition":
+    case "aggregation":
+      return "smoothstep";
     default:
-      return 'default';
+      return "default";
   }
 }
 
@@ -162,7 +162,7 @@ function applyForceDirectedLayout(nodes: DiagramNode[]): DiagramNode[] {
   const damping = 0.8;
 
   // Create a copy of nodes with velocity
-  const layoutNodes = nodes.map(node => ({
+  const layoutNodes = nodes.map((node) => ({
     ...node,
     vx: 0,
     vy: 0,
@@ -197,8 +197,10 @@ function applyForceDirectedLayout(nodes: DiagramNode[]): DiagramNode[] {
   }
 
   // Center the layout
-  const avgX = layoutNodes.reduce((sum, n) => sum + n.position.x, 0) / layoutNodes.length;
-  const avgY = layoutNodes.reduce((sum, n) => sum + n.position.y, 0) / layoutNodes.length;
+  const avgX =
+    layoutNodes.reduce((sum, n) => sum + n.position.x, 0) / layoutNodes.length;
+  const avgY =
+    layoutNodes.reduce((sum, n) => sum + n.position.y, 0) / layoutNodes.length;
 
   return layoutNodes.map(({ vx, vy, ...node }) => ({
     ...node,
@@ -213,7 +215,10 @@ function applyForceDirectedLayout(nodes: DiagramNode[]): DiagramNode[] {
  * Hierarchical layout algorithm
  * Requirements: 9.5
  */
-function applyHierarchicalLayout(nodes: DiagramNode[], edges: DiagramEdge[]): DiagramNode[] {
+function applyHierarchicalLayout(
+  nodes: DiagramNode[],
+  edges: DiagramEdge[],
+): DiagramNode[] {
   const levelSpacing = 150;
   const nodeSpacing = 200;
 
@@ -261,9 +266,9 @@ function applyHierarchicalLayout(nodes: DiagramNode[], edges: DiagramEdge[]): Di
 
   // Handle remaining nodes (cycles or disconnected)
   const processedNodes = new Set(levels.flat());
-  const remainingNodes = nodes.filter(n => !processedNodes.has(n.id));
+  const remainingNodes = nodes.filter((n) => !processedNodes.has(n.id));
   if (remainingNodes.length > 0) {
-    levels.push(remainingNodes.map(n => n.id));
+    levels.push(remainingNodes.map((n) => n.id));
   }
 
   // Position nodes based on levels
@@ -282,7 +287,7 @@ function applyHierarchicalLayout(nodes: DiagramNode[], edges: DiagramEdge[]): Di
     });
   });
 
-  return nodes.map(node => ({
+  return nodes.map((node) => ({
     ...node,
     position: positionedNodes.get(node.id) || node.position,
   }));
@@ -315,12 +320,12 @@ export const DiagramCanvas = memo(function DiagramCanvas({
   // Memoized to prevent unnecessary recalculations (Requirement 26.3)
   const flowNodes = useMemo(
     () => convertToFlowNodes(diagramNodes),
-    [diagramNodes]
+    [diagramNodes],
   );
 
   const flowEdges = useMemo(
     () => convertToFlowEdges(diagramEdges),
-    [diagramEdges]
+    [diagramEdges],
   );
 
   // Handle node changes (position, selection, etc.)
@@ -330,21 +335,23 @@ export const DiagramCanvas = memo(function DiagramCanvas({
       if (readOnly || !onNodesChange) return;
 
       const updatedFlowNodes = applyNodeChanges(changes, flowNodes);
-      
-      // Convert back to diagram format
-      const updatedDiagramNodes = updatedFlowNodes.map((flowNode) => {
-        const originalNode = diagramNodes.find((n) => n.id === flowNode.id);
-        if (!originalNode) return null;
 
-        return {
-          ...originalNode,
-          position: flowNode.position,
-        };
-      }).filter((node): node is DiagramNode => node !== null);
+      // Convert back to diagram format
+      const updatedDiagramNodes = updatedFlowNodes
+        .map((flowNode) => {
+          const originalNode = diagramNodes.find((n) => n.id === flowNode.id);
+          if (!originalNode) return null;
+
+          return {
+            ...originalNode,
+            position: flowNode.position,
+          };
+        })
+        .filter((node): node is DiagramNode => node !== null);
 
       onNodesChange(updatedDiagramNodes);
     },
-    [flowNodes, diagramNodes, onNodesChange, readOnly]
+    [flowNodes, diagramNodes, onNodesChange, readOnly],
   );
 
   // Handle edge changes (selection, removal, etc.)
@@ -354,18 +361,20 @@ export const DiagramCanvas = memo(function DiagramCanvas({
       if (readOnly || !onEdgesChange) return;
 
       const updatedFlowEdges = applyEdgeChanges(changes, flowEdges);
-      
-      // Convert back to diagram format
-      const updatedDiagramEdges = updatedFlowEdges.map((flowEdge) => {
-        const originalEdge = diagramEdges.find((e) => e.id === flowEdge.id);
-        if (!originalEdge) return null;
 
-        return originalEdge;
-      }).filter((edge): edge is DiagramEdge => edge !== null);
+      // Convert back to diagram format
+      const updatedDiagramEdges = updatedFlowEdges
+        .map((flowEdge) => {
+          const originalEdge = diagramEdges.find((e) => e.id === flowEdge.id);
+          if (!originalEdge) return null;
+
+          return originalEdge;
+        })
+        .filter((edge): edge is DiagramEdge => edge !== null);
 
       onEdgesChange(updatedDiagramEdges);
     },
-    [flowEdges, diagramEdges, onEdgesChange, readOnly]
+    [flowEdges, diagramEdges, onEdgesChange, readOnly],
   );
 
   // Handle new connections with edge type validation (Requirement 9.3)
@@ -379,27 +388,27 @@ export const DiagramCanvas = memo(function DiagramCanvas({
         id: `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         source: connection.source!,
         target: connection.target!,
-        type: 'association', // Default to association, user can change later
+        type: "association", // Default to association, user can change later
       };
 
       // Validate edge type
       if (!isValidEdgeType(newDiagramEdge.type)) {
-        console.error('Invalid edge type:', newDiagramEdge.type);
+        console.error("Invalid edge type:", newDiagramEdge.type);
         return;
       }
 
       onEdgesChange([...diagramEdges, newDiagramEdge]);
     },
-    [diagramEdges, onEdgesChange, readOnly]
+    [diagramEdges, onEdgesChange, readOnly],
   );
 
   // Handle edge deletion (Requirement 9.3)
   const handleEdgeDelete = useCallback(
     (edgeId: string) => {
       if (readOnly || !onEdgesChange) return;
-      onEdgesChange(diagramEdges.filter(e => e.id !== edgeId));
+      onEdgesChange(diagramEdges.filter((e) => e.id !== edgeId));
     },
-    [diagramEdges, onEdgesChange, readOnly]
+    [diagramEdges, onEdgesChange, readOnly],
   );
 
   // Apply force-directed layout (Requirement 9.5)
@@ -451,9 +460,12 @@ export const DiagramCanvas = memo(function DiagramCanvas({
             className="bg-white dark:bg-zinc-900"
           />
         )}
-        <Panel position="top-left" className="bg-white dark:bg-zinc-900 rounded-lg shadow-lg p-2">
+        <Panel
+          position="top-left"
+          className="bg-white dark:bg-zinc-900 rounded-lg shadow-lg p-2"
+        >
           <div className="text-xs text-zinc-600 dark:text-zinc-400">
-            {readOnly ? 'Read Only' : 'Interactive Mode'}
+            {readOnly ? "Read Only" : "Interactive Mode"}
             {isLargeGraph && (
               <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">
                 Large diagram mode • {diagramNodes.length} nodes
@@ -463,7 +475,10 @@ export const DiagramCanvas = memo(function DiagramCanvas({
         </Panel>
         {/* Auto-layout controls (Requirement 9.5) */}
         {!readOnly && (
-          <Panel position="top-right" className="bg-white dark:bg-zinc-900 rounded-lg shadow-lg p-2 space-y-2">
+          <Panel
+            position="top-right"
+            className="bg-white dark:bg-zinc-900 rounded-lg shadow-lg p-2 space-y-2"
+          >
             <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50 mb-2">
               Auto-Layout
             </div>

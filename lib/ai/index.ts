@@ -2,9 +2,16 @@
  * AI Module Exports
  */
 
-export { getModelForTask, getValidationFallbackModel, validateApiKeys } from './models'
-export type { ModelProvider, TaskType, ModelConfig } from './models'
-
-export { generateAIText, generateAIObject, generateWithFallback, tokenTracker } from './client'
-
-export { initializeAI, isAIConfigured } from './init'
+export {
+  generateAIObject,
+  generateAIText,
+  generateWithFallback,
+  tokenTracker,
+} from "./client";
+export { initializeAI, isAIConfigured } from "./init";
+export type { ModelConfig, ModelProvider, TaskType } from "./models";
+export {
+  getModelForTask,
+  getValidationFallbackModel,
+  validateApiKeys,
+} from "./models";

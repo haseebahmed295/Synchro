@@ -4,16 +4,16 @@
  * Requirements: 9.1
  */
 
-export type DiagramType = 'class' | 'sequence' | 'erd';
+export type DiagramType = "class" | "sequence" | "erd";
 
-export type NodeType = 'class' | 'entity' | 'actor' | 'lifeline';
+export type NodeType = "class" | "entity" | "actor" | "lifeline";
 
-export type EdgeType = 
-  | 'association' 
-  | 'inheritance' 
-  | 'dependency' 
-  | 'composition' 
-  | 'aggregation';
+export type EdgeType =
+  | "association"
+  | "inheritance"
+  | "dependency"
+  | "composition"
+  | "aggregation";
 
 export interface DiagramNode {
   id: string;

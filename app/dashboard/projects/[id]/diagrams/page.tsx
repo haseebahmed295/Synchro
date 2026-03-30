@@ -8,8 +8,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireAuth } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
-import { DiagramsClient } from "./diagrams-client";
 import type { Diagram } from "@/lib/types/diagram";
+import { DiagramsClient } from "./diagrams-client";
 
 interface DiagramsPageProps {
   params: Promise<{ id: string }>;
@@ -49,10 +49,10 @@ export default async function DiagramsPage({ params }: DiagramsPageProps) {
 
     return {
       id: artifact.id,
-      type: metadata.type || 'class',
+      type: metadata.type || "class",
       nodes: Object.entries(nodes).map(([nodeId, node]: [string, any]) => ({
         id: nodeId,
-        type: node.type || 'class',
+        type: node.type || "class",
         position: node.position || { x: 0, y: 0 },
         data: node.data || { label: nodeId },
       })),
@@ -60,7 +60,7 @@ export default async function DiagramsPage({ params }: DiagramsPageProps) {
         id: edgeId,
         source: edge.source,
         target: edge.target,
-        type: edge.type || 'association',
+        type: edge.type || "association",
         label: edge.label,
         multiplicity: edge.multiplicity,
       })),

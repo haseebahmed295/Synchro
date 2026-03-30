@@ -17,12 +17,16 @@ export interface Requirement {
   type: "functional" | "non-functional";
   priority: "low" | "medium" | "high";
   status: "draft" | "validated" | "implemented";
+  description?: string;
+  links?: string[];
+  tags?: string[];
 }
 
 interface RequirementsTableProps {
   requirements: Requirement[];
   onUpdate: (id: string, field: keyof Requirement, value: string) => void;
   onCreate: () => void;
+  onEditDetails: (requirement: Requirement) => void;
 }
 
 type SortField = keyof Requirement;
@@ -32,6 +36,7 @@ export default function RequirementsTable({
   requirements,
   onUpdate,
   onCreate,
+  onEditDetails,
 }: RequirementsTableProps) {
   const [editingCell, setEditingCell] = useState<{
     id: string;
@@ -201,13 +206,16 @@ export default function RequirementsTable({
                 {sortField === "status" &&
                   (sortDirection === "asc" ? "↑" : "↓")}
               </th>
+              <th className="px-4 py-3 text-left text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-200 bg-white dark:divide-zinc-800 dark:bg-zinc-950">
             {filteredAndSortedRequirements.length === 0 ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400"
                 >
                   No requirements found
@@ -340,6 +348,15 @@ export default function RequirementsTable({
                         {req.status}
                       </span>
                     )}
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    <Button
+                      onClick={() => onEditDetails(req)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Edit
+                    </Button>
                   </td>
                 </tr>
               ))

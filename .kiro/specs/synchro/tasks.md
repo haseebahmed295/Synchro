@@ -233,25 +233,25 @@ This implementation plan follows a phased approach to build Synchro, an AI-nativ
     - Store diagram state in artifacts table with type='diagram'
     - _Requirements: 9.2, 9.4_
 
-- [ ] 16. Implement bidirectional diagram-requirement sync
-  - [ ] 16.1 Create diagram-to-requirement reverse engineering
+- [x] 16. Implement bidirectional diagram-requirement sync
+  - [x] 16.1 Create diagram-to-requirement reverse engineering
     - Implement diagram_to_requirements method in Architect
     - Analyze diagram changes and suggest requirement updates
     - Include reasoning and confidence scores in suggestions
     - _Requirements: 10.2, 10.3_
   
-  - [ ] 16.2 Create requirement-to-diagram forward sync
+  - [x] 16.2 Create requirement-to-diagram forward sync
     - Implement suggest_diagram_updates method in Architect
     - Detect requirement changes and suggest diagram modifications
     - _Requirements: 10.1, 10.3_
   
-  - [ ] 16.3 Build suggestion approval UI
+  - [x] 16.3 Build suggestion approval UI
     - Display sync suggestions to users
     - Allow users to accept or reject suggestions
     - Create bidirectional traceability links when accepted
     - _Requirements: 10.4, 10.5_
 
-- [ ] 17. Checkpoint - Ensure all tests pass
+- [x] 17. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Phase 4: Code & Validation
