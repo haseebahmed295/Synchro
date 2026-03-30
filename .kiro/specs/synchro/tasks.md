@@ -95,36 +95,36 @@ This implementation plan follows a phased approach to build Synchro, an AI-nativ
 
 ## Phase 2: Intelligent Ingestion
 
-- [-] 7. Set up LangGraph.js agent orchestration framework
-  - [-] 7.1 Initialize LangGraph.js state machine
+- [x] 7. Set up LangGraph.js agent orchestration framework
+  - [x] 7.1 Initialize LangGraph.js state machine
     - Install @langchain/langgraph package
     - Define LangGraph state schema with iteration_count field
     - Create agent router to dispatch events to appropriate agents
     - Implement iteration limit enforcement (max 5 iterations)
     - _Requirements: 22.1, 22.2, 22.3_
   
-  - [ ] 7.2 Configure multi-model AI strategy
+  - [x] 7.2 Configure multi-model AI strategy
     - Install @ai-sdk/anthropic, @ai-sdk/google, @ai-sdk/openai packages
     - Set up API clients for Claude Sonnet 4.6, Gemini 3 Flash, GPT-5.2, DeepSeek-V3
     - Implement model selection logic based on task type
     - Add fallback handling for model unavailability
     - _Requirements: 31.1, 31.2, 31.3, 31.4, 31.5_
 
-- [ ] 8. Implement Module A: The Analyst (text ingestion)
-  - [ ] 8.1 Create Analyst agent for text requirement ingestion
+- [x] 8. Implement Module A: The Analyst (text ingestion)
+  - [x] 8.1 Create Analyst agent for text requirement ingestion
     - Implement ingest_text method to parse raw text into structured requirements
     - Generate unique requirement IDs following REQ_[A-Z0-9]+ pattern
     - Classify requirements as functional or non-functional
     - Assign priority levels (low, medium, high) and set status to "draft"
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
   
-  - [ ] 8.2 Implement surgical requirement updates
+  - [x] 8.2 Implement surgical requirement updates
     - Create surgical_update method to generate RFC 6902 JSON Patches
     - Validate that patches preserve stable keys
     - Apply patches to existing requirements
     - _Requirements: 6.1, 6.2, 6.4_
   
-  - [ ]* 8.3 Write unit tests for Analyst text ingestion
+  - [x] 8.3 Write unit tests for Analyst text ingestion
     - Test requirement extraction from various text formats using Vitest
     - Test stable key preservation across updates
     - Test requirement ID uniqueness
@@ -168,67 +168,67 @@ This implementation plan follows a phased approach to build Synchro, an AI-nativ
 
 ## Phase 3: Visual Automation
 
-- [ ] 12. Set up React Flow canvas infrastructure
-  - [ ] 12.1 Initialize React Flow canvas component
+- [x] 12. Set up React Flow canvas infrastructure
+  - [x] 12.1 Initialize React Flow canvas component
     - Install and configure React Flow library
     - Create canvas page with zoom, pan, and selection controls
     - Implement node and edge rendering
     - _Requirements: 9.1_
   
-  - [ ] 12.2 Optimize canvas performance for large diagrams
+  - [x] 12.2 Optimize canvas performance for large diagrams
     - Implement lazy loading for diagrams with >100 nodes
     - Use React.memo and useMemo for expensive renders
     - Maintain interaction latency below 16ms for 60 FPS
     - _Requirements: 26.1, 26.2, 26.3_
 
-- [ ] 13. Implement Module B: The Architect (diagram generation)
-  - [ ] 13.1 Create Architect agent for diagram generation
+- [-] 13. Implement Module B: The Architect (diagram generation)
+  - [x] 13.1 Create Architect agent for diagram generation
     - Implement requirements_to_diagram method using Claude Sonnet 4.6
     - Support UML Class, Sequence, and ERD diagram types
     - Generate unique IDs for all nodes and edges
     - Complete diagram generation within 10 seconds
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.6_
   
-  - [ ] 13.2 Create traceability links from requirements to diagrams
+  - [x] 13.2 Create traceability links from requirements to diagrams
     - Analyze requirement text to identify relevant diagram elements
     - Generate traceability links with confidence scores
     - _Requirements: 7.5_
   
-  - [ ]* 13.3 Write unit tests for Architect diagram generation
+  - [x] 13.3 Write unit tests for Architect diagram generation
     - Test diagram generation from various requirement sets
     - Test node and edge ID uniqueness
     - Test traceability link creation
     - _Requirements: 35.1_
 
-- [ ] 14. Implement diagram validation with Judge agent
-  - [ ] 14.1 Create Judge agent validation methods
+- [x] 14. Implement diagram validation with Judge agent
+  - [x] 14.1 Create Judge agent validation methods
     - Implement validate_diagram_consistency method
     - Check for orphaned nodes with no connections
     - Validate that inheritance edges do not form cycles
     - Use GPT-5.2 for complex UML validation
     - _Requirements: 8.1, 8.3, 8.4, 8.6_
   
-  - [ ] 14.2 Implement Critic/Refine loop for diagram validation
+  - [x] 14.2 Implement Critic/Refine loop for diagram validation
     - Validate Architect output before database write
     - Provide feedback to Architect for refinement
     - Allow up to 2 refinement iterations
     - Escalate to user if validation fails after 2 iterations
     - _Requirements: 8.2, 8.5, 21.1, 21.6, 21.7, 21.8_
 
-- [ ] 15. Implement interactive diagram editing
-  - [ ] 15.1 Enable manual node and edge manipulation
+- [x] 15. Implement interactive diagram editing
+  - [x] 15.1 Enable manual node and edge manipulation
     - Implement drag-and-drop for node positioning
     - Add controls for creating and deleting edges
     - Validate relationship types when edges are modified
     - _Requirements: 9.2, 9.3_
   
-  - [ ] 15.2 Implement auto-layout algorithms
+  - [x] 15.2 Implement auto-layout algorithms
     - Add force-directed layout option
     - Add hierarchical layout option
     - Allow users to trigger auto-layout
     - _Requirements: 9.5_
   
-  - [ ] 15.3 Persist diagram changes to database
+  - [x] 15.3 Persist diagram changes to database
     - Update node positions in real-time with debouncing
     - Store diagram state in artifacts table with type='diagram'
     - _Requirements: 9.2, 9.4_
@@ -269,7 +269,7 @@ This implementation plan follows a phased approach to build Synchro, an AI-nativ
     - Store code in artifacts table with type='code'
     - _Requirements: 11.6_
   
-  - [ ]* 18.3 Write unit tests for Implementer code generation
+  - [ ] 18.3 Write unit tests for Implementer code generation
     - Test code generation from class diagrams
     - Test template rendering with various configurations
     - Test generated code syntax validity
