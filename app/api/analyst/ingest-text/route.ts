@@ -56,38 +56,85 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create Analyst agent and ingest text
-    const analyst = new AnalystAgent();
-    const requirements = await analyst.ingestText(text, projectId, user.id);
+    // Create a streaming response
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          // Create Analyst agent and ingest text with streaming
+          const analyst = new AnalystAgent();
+          
+          let requirementCount = 0;
+          
+          // Use streaming callback
+          await analyst.ingestTextStreaming(
+            text,
+            projectId,
+            user.id,
+            async (requirement) => {
+              // Save each requirement as it's generated
+              const artifact = {
+                project_id: projectId,
+                type: "requirement" as const,
+                content: requirement,
+                metadata: {},
+                version: 1,
+                created_by: user.id,
+              };
 
-    // Store requirements in database
-    const artifacts = requirements.map((req) => ({
-      project_id: projectId,
-      type: "requirement" as const,
-      content: req,
-      metadata: {},
-      version: 1,
-      created_by: user.id,
-    }));
+              const { data: insertedArtifact, error: insertError } = await supabase
+                .from("artifacts")
+                .insert(artifact)
+                .select()
+                .single();
 
-    const { data: insertedArtifacts, error: insertError } = await supabase
-      .from("artifacts")
-      .insert(artifacts)
-      .select();
+              if (insertError) {
+                console.error("Failed to insert requirement", insertError);
+                // Send error event
+                controller.enqueue(
+                  encoder.encode(
+                    `data: ${JSON.stringify({ type: "error", error: insertError.message })}\n\n`,
+                  ),
+                );
+              } else {
+                requirementCount++;
+                console.log(`[SSE] Sending requirement ${requirementCount}:`, insertedArtifact.content.title);
+                // Send success event with the created requirement
+                controller.enqueue(
+                  encoder.encode(
+                    `data: ${JSON.stringify({ type: "requirement", requirement: insertedArtifact, count: requirementCount })}\n\n`,
+                  ),
+                );
+              }
+            },
+          );
 
-    if (insertError) {
-      console.error("Failed to insert requirements", insertError);
-      return NextResponse.json(
-        { error: "Failed to save requirements", details: insertError.message },
-        { status: 500 },
-      );
-    }
+          // Send completion event
+          console.log(`[SSE] Sending completion event - ${requirementCount} requirements created`);
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ type: "complete", count: requirementCount })}\n\n`,
+            ),
+          );
+          controller.close();
+        } catch (error) {
+          console.error("Streaming error", error);
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ type: "error", error: error instanceof Error ? error.message : "Unknown error" })}\n\n`,
+            ),
+          );
+          controller.close();
+        }
+      },
+    });
 
-    return NextResponse.json({
-      success: true,
-      requirements,
-      artifacts: insertedArtifacts,
-      count: requirements.length,
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
     });
   } catch (error) {
     console.error("Text ingestion failed", error);

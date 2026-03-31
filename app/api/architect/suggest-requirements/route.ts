@@ -69,7 +69,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Diagram not found" }, { status: 404 });
     }
 
-    const diagram = diagramArtifact.content;
+    // Parse diagram content into Diagram format
+    const content = diagramArtifact.content || {};
+    const metadata = content.diagram_metadata || {};
+    const nodesObj = content.nodes || {};
+    const edgesObj = content.edges || {};
+
+    const diagram = {
+      id: diagramArtifact.id,
+      type: metadata.type || "class",
+      nodes: Object.entries(nodesObj).map(([id, node]: [string, any]) => ({
+        id,
+        type: node.type || "class",
+        position: node.position || { x: 0, y: 0 },
+        data: node.data || { label: id },
+      })),
+      edges: Object.entries(edgesObj).map(([id, edge]: [string, any]) => ({
+        id,
+        source: edge.source,
+        target: edge.target,
+        type: edge.type || "association",
+        label: edge.label,
+        multiplicity: edge.multiplicity,
+      })),
+      metadata: {
+        name: metadata.name,
+        description: metadata.description,
+      },
+    };
 
     // Optionally fetch previous diagram for comparison
     let previousDiagram: any;
@@ -82,7 +109,33 @@ export async function POST(request: NextRequest) {
         .single();
 
       if (!prevError && prevDiagramArtifact) {
-        previousDiagram = prevDiagramArtifact.content;
+        const prevContent = prevDiagramArtifact.content || {};
+        const prevMetadata = prevContent.diagram_metadata || {};
+        const prevNodesObj = prevContent.nodes || {};
+        const prevEdgesObj = prevContent.edges || {};
+
+        previousDiagram = {
+          id: prevDiagramArtifact.id,
+          type: prevMetadata.type || "class",
+          nodes: Object.entries(prevNodesObj).map(([id, node]: [string, any]) => ({
+            id,
+            type: node.type || "class",
+            position: node.position || { x: 0, y: 0 },
+            data: node.data || { label: id },
+          })),
+          edges: Object.entries(prevEdgesObj).map(([id, edge]: [string, any]) => ({
+            id,
+            source: edge.source,
+            target: edge.target,
+            type: edge.type || "association",
+            label: edge.label,
+            multiplicity: edge.multiplicity,
+          })),
+          metadata: {
+            name: prevMetadata.name,
+            description: prevMetadata.description,
+          },
+        };
       }
     }
 

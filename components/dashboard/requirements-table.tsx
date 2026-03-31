@@ -27,6 +27,7 @@ interface RequirementsTableProps {
   onUpdate: (id: string, field: keyof Requirement, value: string) => void;
   onCreate: () => void;
   onEditDetails: (requirement: Requirement) => void;
+  onDelete: (id: string) => void;
 }
 
 type SortField = keyof Requirement;
@@ -37,6 +38,7 @@ export default function RequirementsTable({
   onUpdate,
   onCreate,
   onEditDetails,
+  onDelete,
 }: RequirementsTableProps) {
   const [editingCell, setEditingCell] = useState<{
     id: string;
@@ -113,6 +115,7 @@ export default function RequirementsTable({
       const aVal = a[sortField];
       const bVal = b[sortField];
 
+      if (aVal === undefined || bVal === undefined) return 0;
       if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
       if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
       return 0;
@@ -350,13 +353,30 @@ export default function RequirementsTable({
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm">
-                    <Button
-                      onClick={() => onEditDetails(req)}
-                      size="sm"
-                      variant="outline"
-                    >
-                      Edit
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={() => onEditDetails(req)}
+                        size="sm"
+                        variant="outline"
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          if (
+                            confirm(
+                              `Are you sure you want to delete requirement "${req.req_id}"?`,
+                            )
+                          ) {
+                            onDelete(req.id);
+                          }
+                        }}
+                        size="sm"
+                        variant="destructive"
+                      >
+                        Delete
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))

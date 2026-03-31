@@ -5,21 +5,19 @@
  */
 
 import { z } from "zod";
-import { generateAIObject, generateAIText } from "../ai/client";
+import { generateAIObject, generateAIObjectStreaming, generateAIText } from "../ai/client";
 import type { JSONPatch } from "./json-patch";
 
 /**
  * Requirement schema matching the stable key JSON schema from design
  */
 export const RequirementSchema = z.object({
-  id: z
-    .string()
-    .regex(/^REQ_[A-Z0-9]+$/, "ID must follow pattern REQ_[A-Z0-9]+"),
+  id: z.string().min(1), // Relaxed - we'll generate proper IDs ourselves
   title: z.string().min(1).max(200),
   description: z.string().min(1),
-  type: z.enum(["functional", "non-functional"]),
-  priority: z.enum(["low", "medium", "high"]),
-  status: z.enum(["draft", "validated", "implemented"]),
+  type: z.enum(["functional", "non-functional", "Functional", "Non-functional", "Non-Functional"]).transform(val => val.toLowerCase() as "functional" | "non-functional"),
+  priority: z.enum(["low", "medium", "high", "Low", "Medium", "High"]).transform(val => val.toLowerCase() as "low" | "medium" | "high"),
+  status: z.enum(["draft", "validated", "implemented", "Draft", "Validated", "Implemented"]).transform(val => val.toLowerCase() as "draft" | "validated" | "implemented"),
   links: z.array(z.string()).default([]),
   metadata: z
     .object({
@@ -53,28 +51,36 @@ export class AnalystAgent {
     projectId: string,
     userId: string,
   ): Promise<Requirement[]> {
-    const systemPrompt = `You are an expert requirements analyst. Your task is to parse raw text and extract structured software requirements.
+    const systemPrompt = `You are an expert requirements analyst. Extract structured software requirements from text.
 
-For each requirement you identify:
-1. Generate a unique ID following the pattern REQ_[A-Z0-9]+ (e.g., REQ_AUTH_001, REQ_DB_002)
-2. Extract a clear, concise title (max 200 characters)
-3. Write a detailed description
-4. Classify as either "functional" or "non-functional"
-5. Assign priority: "low", "medium", or "high"
-6. Set status to "draft" for all newly extracted requirements
+Return ONLY valid JSON in this format:
+{
+  "requirements": [
+    {
+      "id": "temp_1",
+      "title": "Short requirement title",
+      "description": "Detailed description of what is needed",
+      "type": "functional",
+      "priority": "medium",
+      "status": "draft",
+      "links": []
+    }
+  ]
+}
 
-Guidelines:
+Rules:
+- "id" can be any string (we'll generate proper IDs)
+- "type" must be "functional" or "non-functional"
+- "priority" must be "low", "medium", or "high"
+- "status" should be "draft"
+- "links" should be an empty array
 - Each requirement should be atomic and testable
-- Functional requirements describe what the system should do
-- Non-functional requirements describe quality attributes (performance, security, usability)
-- Be conservative - only extract clear, well-defined requirements
-- If text is ambiguous, still extract it but mark as low priority`;
+- Functional requirements describe what the system does
+- Non-functional requirements describe quality attributes`;
 
-    const prompt = `Extract structured requirements from the following text:
+    const prompt = `Extract requirements from this text. Return ONLY JSON:
 
-${rawText}
-
-Return a JSON object with an array of requirements.`;
+${rawText}`;
 
     try {
       const result = await generateAIObject(
@@ -84,20 +90,124 @@ Return a JSON object with an array of requirements.`;
         systemPrompt,
       );
 
-      // Add metadata to each requirement
+      // Add metadata and proper IDs to each requirement
       const timestamp = new Date().toISOString();
-      const requirementsWithMetadata = result.requirements.map((req) => ({
-        ...req,
-        metadata: {
-          created_at: timestamp,
-          created_by: userId,
-          tags: [],
-        },
-      }));
+      let counter = 1;
+      
+      const requirementsWithMetadata = result.requirements.map((req) => {
+        const properReqId = `REQ_${Date.now().toString(36).toUpperCase()}_${counter.toString().padStart(3, '0')}`;
+        counter++;
+        
+        return {
+          ...req,
+          id: properReqId,
+          type: req.type.toLowerCase() as "functional" | "non-functional",
+          priority: req.priority.toLowerCase() as "low" | "medium" | "high",
+          status: "draft" as const,
+          links: req.links || [],
+          metadata: {
+            created_at: timestamp,
+            created_by: userId,
+            tags: [],
+          },
+        };
+      });
 
       return requirementsWithMetadata;
     } catch (error) {
       console.error("Failed to ingest text requirements", error);
+      
+      // Log the actual error details for debugging
+      if (error instanceof Error) {
+        console.error("Error details:", error.message);
+      }
+      
+      throw new Error(
+        `Requirement ingestion failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+  }
+
+  /**
+   * Ingest raw text and extract structured requirements with streaming
+   * Calls the callback for each requirement as it's validated
+   */
+  async ingestTextStreaming(
+    rawText: string,
+    projectId: string,
+    userId: string,
+    onRequirement: (requirement: Requirement) => Promise<void>,
+  ): Promise<void> {
+    const systemPrompt = `You are an expert requirements analyst. Extract structured software requirements from text.
+
+Return ONLY valid JSON in this format:
+{
+  "requirements": [
+    {
+      "id": "temp_1",
+      "title": "Short requirement title",
+      "description": "Detailed description of what is needed",
+      "type": "functional",
+      "priority": "medium",
+      "status": "draft",
+      "links": []
+    }
+  ]
+}
+
+Rules:
+- "id" can be any string (we'll generate proper IDs)
+- "type" must be "functional" or "non-functional"
+- "priority" must be "low", "medium", or "high"
+- "status" should be "draft"
+- "links" should be an empty array
+- Each requirement should be atomic and testable
+- Functional requirements describe what the system does
+- Non-functional requirements describe quality attributes`;
+
+    const prompt = `Extract requirements from this text. Return ONLY JSON:
+
+${rawText}`;
+
+    try {
+      let counter = 1;
+      const timestamp = new Date().toISOString();
+
+      await generateAIObjectStreaming(
+        "reasoning",
+        prompt,
+        RequirementsExtractionSchema,
+        systemPrompt,
+        async (req) => {
+          // Generate a proper REQ_ID
+          const properReqId = `REQ_${Date.now().toString(36).toUpperCase()}_${counter.toString().padStart(3, '0')}`;
+          
+          const requirementWithMetadata: Requirement = {
+            ...req,
+            id: properReqId,
+            type: req.type.toLowerCase() as "functional" | "non-functional",
+            priority: req.priority.toLowerCase() as "low" | "medium" | "high",
+            status: "draft",
+            links: req.links || [],
+            metadata: {
+              created_at: timestamp,
+              created_by: userId,
+              tags: [],
+            },
+          };
+          
+          console.log(`[Analyst] Validated requirement ${counter}:`, requirementWithMetadata.title);
+          await onRequirement(requirementWithMetadata);
+          counter++;
+        },
+      );
+    } catch (error) {
+      console.error("Failed to ingest text requirements", error);
+      
+      if (error instanceof Error) {
+        console.error("Error details:", error.message);
+      }
+      
       throw new Error(
         `Requirement ingestion failed: ${error instanceof Error ? error.message : "Unknown error"}`,
       );

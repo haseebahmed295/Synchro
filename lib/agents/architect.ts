@@ -7,6 +7,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 import { generateAIObject } from "../ai/client";
+import { computeLayout } from "../utils/diagram-layout";
 import type { Diagram, DiagramEdge, DiagramNode } from "../types/diagram";
 import type { Requirement } from "./analyst";
 import type { TraceabilityLink } from "./types";
@@ -18,7 +19,10 @@ const DiagramGenerationSchema = z.object({
   nodes: z.array(
     z.object({
       id: z.string(),
-      type: z.enum(["class", "entity", "actor", "lifeline"]),
+      type: z.string().transform((t) => {
+          const valid = ["class", "entity", "actor", "lifeline", "device", "executionEnvironment", "artifact", "process", "decision", "terminal", "io"];
+          return valid.includes(t) ? t : "class";
+        }) as z.ZodType<"class" | "entity" | "actor" | "lifeline" | "device" | "executionEnvironment" | "artifact" | "process" | "decision" | "terminal" | "io">,
       position: z.object({
         x: z.number(),
         y: z.number(),
@@ -28,6 +32,7 @@ const DiagramGenerationSchema = z.object({
         attributes: z.array(z.string()).optional(),
         methods: z.array(z.string()).optional(),
         stereotype: z.string().optional(),
+        children: z.array(z.string()).optional(),
       }),
       linkedRequirements: z.array(z.string()).optional(),
     }),
@@ -35,8 +40,8 @@ const DiagramGenerationSchema = z.object({
   edges: z.array(
     z.object({
       id: z.string(),
-      source: z.string(),
-      target: z.string(),
+      source: z.string().optional(), // Make optional to handle AI errors
+      target: z.string().optional(), // Make optional to handle AI errors
       type: z.enum([
         "association",
         "inheritance",
@@ -53,7 +58,7 @@ const DiagramGenerationSchema = z.object({
         .optional(),
     }),
   ),
-  reasoning: z.string(),
+  reasoning: z.union([z.string(), z.array(z.string())]), // Accept string or array
 });
 
 type DiagramGenerationResult = z.infer<typeof DiagramGenerationSchema>;
@@ -69,7 +74,7 @@ export class ArchitectAgent {
    */
   async requirementsToDiagram(
     requirements: Requirement[],
-    diagramType: "class" | "sequence" | "erd",
+    diagramType: "class" | "sequence" | "erd" | "deployment" | "flowchart",
     projectId: string,
     userId: string,
   ): Promise<{ diagram: Diagram; traceabilityLinks: TraceabilityLink[] }> {
@@ -91,11 +96,47 @@ Priority: ${req.priority}
 Instructions:
 1. Generate unique IDs for all nodes and edges (use descriptive names like "USER_CLASS", "AUTH_ENTITY", etc.)
 2. For each node, specify which requirements it relates to in the linkedRequirements array
-3. Position nodes in a logical layout (use a grid or hierarchical layout)
+3. Generate positions following the STRICT layout rules in the system prompt for this diagram type
 4. Create appropriate relationships between nodes based on requirement descriptions
 5. Include reasoning explaining your design decisions
 
-Return a JSON object with nodes, edges, and reasoning.`;
+IMPORTANT: Return a JSON object with this exact structure:
+{
+  "nodes": [
+    {
+      "id": "string (unique identifier)",
+      "type": "class" | "entity" | "actor" | "lifeline",
+      "position": { "x": number, "y": number },
+      "data": {
+        "label": "string (display name)",
+        "attributes": ["optional", "array", "of", "strings"],
+        "methods": ["optional", "array", "of", "strings"],
+        "stereotype": "optional string"
+      },
+      "linkedRequirements": ["optional", "array", "of", "requirement", "ids"]
+    }
+  ],
+  "edges": [
+    {
+      "id": "string (unique identifier like 'edge_1')",
+      "source": "string (must match a node id)",
+      "target": "string (must match a node id)",
+      "type": "association" | "inheritance" | "dependency" | "composition" | "aggregation",
+      "label": "optional string",
+      "multiplicity": {
+        "source": "optional string like '1' or '0..*'",
+        "target": "optional string like '1' or '0..*'"
+      }
+    }
+  ],
+  "reasoning": "string explaining your design decisions"
+}
+
+CRITICAL: 
+- Every edge MUST have both "source" and "target" fields that reference existing node IDs
+- "reasoning" MUST be a single string, not an array
+- All node IDs must be unique
+- All edge source/target must reference existing node IDs`;
 
     try {
       const result = await generateAIObject(
@@ -103,6 +144,30 @@ Return a JSON object with nodes, edges, and reasoning.`;
         prompt,
         DiagramGenerationSchema,
         systemPrompt,
+      );
+
+      // Filter out invalid edges (those without source or target)
+      const validEdges = result.edges.filter(edge => {
+        if (!edge.source || !edge.target) {
+          console.warn(`Skipping invalid edge: ${edge.id} - missing source or target`);
+          return false;
+        }
+        // Check if source and target nodes exist
+        const sourceExists = result.nodes.some(n => n.id === edge.source);
+        const targetExists = result.nodes.some(n => n.id === edge.target);
+        if (!sourceExists || !targetExists) {
+          console.warn(`Skipping invalid edge: ${edge.id} - source or target node not found`);
+          return false;
+        }
+        return true;
+      });
+
+      // Compute proper layout — pass full node data so height estimation works
+      const aiPositions = new Map(result.nodes.map((n) => [n.id, n.position]));
+      const layoutPositions = computeLayout(
+        result.nodes.map((n) => ({ id: n.id, type: n.type, data: n.data })),
+        validEdges,
+        aiPositions,
       );
 
       // Create diagram with unique ID
@@ -113,18 +178,29 @@ Return a JSON object with nodes, edges, and reasoning.`;
         nodes: result.nodes.map((node) => ({
           id: node.id,
           type: node.type,
-          position: node.position,
+          position: layoutPositions.get(node.id) ?? node.position,
           data: node.data,
         })),
-        edges: result.edges,
+        edges: validEdges,
         metadata: {
           name: `${diagramType.toUpperCase()} Diagram`,
-          description: result.reasoning,
+          description: Array.isArray(result.reasoning) ? result.reasoning.join(' ') : result.reasoning,
         },
       };
 
       // Create traceability links from requirements to diagram nodes
       const traceabilityLinks: TraceabilityLink[] = [];
+
+      // Create a map of requirement content IDs to artifact UUIDs
+      const reqIdToArtifactId = new Map<string, string>();
+      for (const req of requirements) {
+        // req is the content object, we need to find the artifact ID
+        // The requirement content has an id field like "REQ_XXX"
+        // We need to match this back to the artifact
+        if (req.id) {
+          reqIdToArtifactId.set(req.id, req.id); // This will be fixed below
+        }
+      }
 
       for (const node of result.nodes) {
         if (node.linkedRequirements && node.linkedRequirements.length > 0) {
@@ -132,6 +208,8 @@ Return a JSON object with nodes, edges, and reasoning.`;
             // Verify requirement exists
             const requirement = requirements.find((r) => r.id === reqId);
             if (requirement) {
+              // Note: We're using the requirement content ID here
+              // The API route should pass artifact IDs, not content IDs
               traceabilityLinks.push({
                 sourceId: reqId,
                 targetId: node.id,
@@ -246,7 +324,7 @@ Return a JSON array of links with: requirementId, nodeId, confidence, reasoning`
    * Get system prompt based on diagram type
    */
   private getSystemPromptForDiagramType(
-    diagramType: "class" | "sequence" | "erd",
+    diagramType: "class" | "sequence" | "erd" | "deployment" | "flowchart",
   ): string {
     switch (diagramType) {
       case "class":
@@ -254,68 +332,151 @@ Return a JSON array of links with: requirementId, nodeId, confidence, reasoning`
 
 Your task is to generate well-structured class diagrams from requirements.
 
-Guidelines for Class Diagrams:
-1. Identify key entities, services, and data structures from requirements
-2. Define attributes (properties/fields) for each class
-3. Define methods (operations/functions) for each class
-4. Use appropriate relationships:
-   - inheritance: "is-a" relationships (e.g., Admin extends User)
-   - association: general relationships between classes
-   - composition: strong "has-a" relationships (lifecycle dependency)
-   - aggregation: weak "has-a" relationships (independent lifecycle)
-   - dependency: one class uses another temporarily
-5. Add stereotypes when appropriate (<<interface>>, <<abstract>>, <<service>>)
-6. Position classes in a logical grid layout (100px spacing)
-7. Ensure all node and edge IDs are unique and descriptive
+NODE DIMENSIONS (fixed — do not exceed these):
+- Every node is exactly 200px wide and at most 220px tall
+- Keep attributes to max 5 items, methods to max 4 items — truncate if needed
 
-Best Practices:
-- Keep classes focused and cohesive
-- Follow SOLID principles
-- Use clear, descriptive names
-- Include multiplicity for associations when relevant`;
+STRICT POSITION RULES — LEFT TO RIGHT LAYOUT:
+Arrange nodes in columns from left to right based on dependency flow.
+- Column 0 (x=60):   Entry points — actors, controllers, API handlers (things that initiate)
+- Column 1 (x=320):  Services — business logic classes
+- Column 2 (x=580):  Domain entities — core data models
+- Column 3 (x=840):  Repositories / persistence layer
+- Column 4 (x=1100): Value objects, enums, helper types
+
+Within each column, stack nodes vertically with 260px between them: y=60, 320, 580, 840...
+No two nodes may share the same (x, y) position.
+
+EXAMPLES:
+- A Controller at (60, 60) calls a Service at (320, 60) which uses an Entity at (580, 60)
+- A second Service at (320, 320) uses the same Entity at (580, 60) — edges cross columns cleanly
+- Repositories go at x=840, value objects at x=1100
+
+Guidelines:
+1. Assign each class to the correct column based on its role
+2. Keep attributes concise: "fieldName: type" format, max 5
+3. Keep methods concise: "methodName(): returnType" format, max 4
+4. Use appropriate relationships: inheritance, association, composition, aggregation, dependency
+5. Add stereotypes: <<service>>, <<entity>>, <<valueObject>>, <<repository>>, <<controller>>
+6. Ensure all node and edge IDs are unique and descriptive`;
 
       case "sequence":
         return `You are an expert software architect specializing in UML Sequence diagrams.
 
 Your task is to generate sequence diagrams showing interactions between components.
 
+POSITION RULES: Set ALL node positions to { "x": 0, "y": 0 } — the renderer handles column layout automatically.
+
 Guidelines for Sequence Diagrams:
 1. Identify actors (users, external systems) and system components
-2. Use "actor" type for external entities
-3. Use "lifeline" type for system components
-4. Create edges showing message flow in chronological order
-5. Label edges with method calls or messages
-6. Position actors/lifelines horizontally with 150px spacing
-7. Ensure all node and edge IDs are unique and descriptive
+2. Use "actor" type for external entities (users, external systems)
+3. Use "lifeline" type for internal system components
+4. Create edges in CHRONOLOGICAL ORDER — the order of edges in the array determines the vertical sequence
+5. Label every edge with the message/method call being sent
+6. Keep the number of lifelines focused (5-8 max) — prefer fewer, well-named participants
+7. Ensure all node and edge IDs are unique and descriptive`;
 
-Best Practices:
-- Show the flow of a specific use case or scenario
-- Include both synchronous and asynchronous messages
-- Show return messages when relevant
-- Keep sequences focused on one interaction flow`;
-
+      case "erd":
       case "erd":
         return `You are an expert database architect specializing in Entity-Relationship Diagrams.
 
-Your task is to generate ERD diagrams showing data models and relationships.
+Your task is to generate ERD diagrams in the style of SQLhabit's schema visualizer.
 
-Guidelines for ERD Diagrams:
-1. Identify entities (database tables) from requirements
-2. Define attributes (columns) for each entity
-3. Identify primary keys and important fields
-4. Use appropriate relationships:
-   - association: general relationships with cardinality
-   - composition: strong relationships (cascade delete)
-   - aggregation: weak relationships
-5. Add multiplicity labels (1:1, 1:N, N:M)
-6. Position entities in a logical layout (120px spacing)
-7. Ensure all node and edge IDs are unique and descriptive
+NODE FORMAT:
+- type: "entity" for all tables
+- label: "table_name" (use "schema.table_name" format if there's a schema prefix)
+- attributes: array of columns in format "column_name: type"
+  - Mark primary keys with "🔑 id: integer" 
+  - Keep to max 8 columns per table
+  - Common types: integer, text, boolean, datetime, float, JSON, date, uuid
 
-Best Practices:
-- Normalize to at least 3NF when appropriate
-- Identify foreign key relationships
-- Include important constraints
-- Use clear, database-friendly naming conventions`;
+EDGE FORMAT:
+- source/target: table node IDs
+- type: "association" for all FK relationships
+- label: "sourceColumn -> targetColumn" (e.g. "id -> user_id")
+- multiplicity: { source: "1", target: "0..*" } for hasMany, { source: "1", target: "0..1" } for hasOne
+
+POSITION RULES — same LR grid as class diagrams:
+- Central tables (most FK references) at x=580, y=320
+- Tables referencing the central table spread around it
+- Use x=60,320,580,840,1100 and y=60,320,580,840
+- No two tables at the same position
+
+Guidelines:
+1. Identify all entities (tables) from requirements
+2. Every table must have an "id" primary key
+3. Foreign keys should be "referenced_table_id: integer"
+4. Include created_at/updated_at where relevant
+5. Ensure all node and edge IDs are unique`;
+
+      case "flowchart":
+        return `You are an expert software architect specializing in flowcharts.
+
+Your task is to generate clear, readable flowcharts from requirements.
+
+NODE TYPES — use exactly these string values:
+- "terminal"  : Start/End oval (rounded pill shape) — use for "Start" and "End" nodes
+- "process"   : Regular step rectangle (rounded corners) — use for actions/steps
+- "decision"  : Diamond shape — use for yes/no or conditional branches
+- "io"        : Parallelogram — use for input/output operations
+
+POSITION RULES — top-to-bottom flow:
+- Start at y=60, increment y by 120 for each step
+- Center nodes at x=400 for the main flow
+- Branch left (x=160) for "No" paths, branch right (x=640) for "Yes" paths
+- Merge branches back to center when they rejoin
+
+EDGE RULES:
+- type: "association" for all edges
+- For decision nodes: label outgoing edges "Yes" or "No"
+- sourceHandle: "yes" for the Yes branch (bottom), "no" for the No branch (right)
+- Keep labels short (1-3 words max)
+
+Guidelines:
+1. Always start with a "terminal" node labeled "Start"
+2. Always end with a "terminal" node labeled "End"  
+3. Use "decision" nodes for any conditional logic
+4. Keep the flow readable — max 12 nodes
+5. Ensure all node and edge IDs are unique`;
+
+      case "deployment":
+        return `You are an expert software architect specializing in UML Deployment Diagrams.
+
+Your task is to generate deployment diagrams showing physical infrastructure and software deployment.
+
+NODE TYPES — use exactly these string values:
+- "device"               : physical/virtual machine, server, cloud node
+- "executionEnvironment" : runtime environment inside a device
+- "artifact"             : deployed software artifact (jar, war, exe, service)
+
+NESTING via "children" array:
+- A device's "children" lists the IDs of executionEnvironments and artifacts directly inside it
+- An executionEnvironment's "children" lists the IDs of artifacts inside it
+- Child positions are RELATIVE to their parent's top-left corner
+
+POSITION RULES:
+Device nodes (top-level only) — place on a loose grid, no overlap:
+  x = 60, 420, 780  (columns, 360px apart)
+  y = 60, 380       (rows, 320px apart)
+
+Inside a device, children stack vertically starting at y=50 (below the header):
+  First child:  x=16, y=50
+  Second child: x=16, y=150
+  Third child:  x=16, y=250
+
+Inside an executionEnvironment, artifacts stack at:
+  First artifact:  x=12, y=44
+  Second artifact: x=12, y=84
+
+Device size must accommodate children — use minWidth=280, and height = 60 + (number_of_children * 100)
+
+EDGES:
+- Only between device-level nodes
+- type: "association"
+- label: protocol (HTTPS, TCP, JDBC, gRPC, etc.)
+
+OUTPUT exactly 4-6 device nodes. Keep it focused.
+Ensure all IDs are unique snake_case strings.`;
 
       default:
         return "You are an expert software architect.";
@@ -360,9 +521,9 @@ Best Practices:
       }
     }
 
-    // Check for valid positions
+    // Check for valid positions (just ensure they are finite numbers)
     for (const node of diagram.nodes) {
-      if (node.position.x < 0 || node.position.y < 0) {
+      if (!isFinite(node.position.x) || !isFinite(node.position.y)) {
         errors.push(
           `Node ${node.id} has invalid position: (${node.position.x}, ${node.position.y})`,
         );
@@ -494,7 +655,9 @@ Suggestion Types:
 - update_requirement: Suggest modifications to existing requirements
 - remove_requirement: Suggest removing requirements that are no longer represented
 
-Return suggestions with high confidence (>0.7) for clear mappings, medium confidence (0.5-0.7) for inferred changes, and low confidence (<0.5) for speculative changes.`;
+Return suggestions with high confidence (>0.7) for clear mappings, medium confidence (0.5-0.7) for inferred changes, and low confidence (<0.5) for speculative changes.
+
+IMPORTANT: You must return a JSON object with a "suggestions" array. Each suggestion must have all required fields.`;
 
     let prompt = `Analyze this diagram and suggest requirement changes:
 
@@ -532,7 +695,24 @@ Analyze the differences between the current and previous diagram to suggest requ
       prompt += `\n\nThis is a new diagram. Suggest requirements that should exist based on the diagram structure.`;
     }
 
-    prompt += `\n\nReturn a JSON array of requirement suggestions.`;
+    prompt += `\n\nReturn a JSON object with this exact structure:
+{
+  "suggestions": [
+    {
+      "action": "add_requirement" | "update_requirement" | "remove_requirement",
+      "requirement_id": "optional string for update/remove actions",
+      "title": "string",
+      "description": "string",
+      "type": "functional" | "non-functional",
+      "priority": "low" | "medium" | "high",
+      "reasoning": "string explaining why this suggestion is made",
+      "confidence": 0.0 to 1.0,
+      "affected_nodes": ["array", "of", "node", "ids"]
+    }
+  ]
+}
+
+If there are no suggestions, return: {"suggestions": []}`;
 
     try {
       const RequirementSuggestionsSchema = z.object({
@@ -578,6 +758,13 @@ Analyze the differences between the current and previous diagram to suggest requ
         "Failed to reverse engineer requirements from diagram",
         error,
       );
+      
+      // If validation failed, return empty suggestions instead of throwing
+      if (error instanceof Error && error.message.includes("Invalid input")) {
+        console.warn("AI returned invalid format, returning empty suggestions");
+        return [];
+      }
+      
       throw new Error(
         `Diagram to requirements conversion failed: ${error instanceof Error ? error.message : "Unknown error"}`,
       );

@@ -14,11 +14,12 @@ import {
   RequirementDetailsDialog,
   type RequirementDetails,
 } from "@/components/dashboard/requirement-details-dialog";
+import { TextToRequirementsDialog } from "@/components/dashboard/text-to-requirements-dialog";
 import SyncSuggestionsPanel from "@/components/dashboard/sync-suggestions-panel";
 import { Button } from "@/components/ui/button";
 import type { DiagramSuggestion } from "@/lib/agents/architect";
 import type { JSONPatch } from "@/lib/agents/json-patch";
-import { createRequirement, updateRequirement } from "@/lib/api/requirements";
+import { createRequirement, updateRequirement, deleteRequirement } from "@/lib/api/requirements";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 import { createClient } from "@/lib/supabase/client";
 
@@ -60,10 +61,17 @@ export default function RequirementsClient({
   const [editingRequirement, setEditingRequirement] =
     useState<RequirementDetails | null>(null);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
+  const [showTextToRequirementsDialog, setShowTextToRequirementsDialog] =
+    useState(false);
+  const [isGeneratingRequirements, setIsGeneratingRequirements] =
+    useState(false);
+  const [generationProgress, setGenerationProgress] = useState(0);
 
   // Set up realtime subscription
   useEffect(() => {
     const supabase = createClient();
+
+    console.log("[Realtime] Setting up subscription for project:", projectId);
 
     const channel = supabase
       .channel(`requirements:${projectId}`)
@@ -76,9 +84,10 @@ export default function RequirementsClient({
           filter: `project_id=eq.${projectId}`,
         },
         (payload) => {
+          console.log("[Realtime] Received event:", payload.eventType, (payload.new as any)?.type);
           if (
             payload.eventType === "INSERT" &&
-            payload.new.type === "requirement"
+            (payload.new as any).type === "requirement"
           ) {
             const newReq = {
               id: payload.new.id,
@@ -91,6 +100,7 @@ export default function RequirementsClient({
               links: payload.new.content.links || [],
               tags: payload.new.content.metadata?.tags || [],
             };
+            console.log("[Realtime] Adding new requirement:", newReq.title);
             setRequirements((prev) => [...prev, newReq]);
           } else if (
             payload.eventType === "UPDATE" &&
@@ -126,6 +136,8 @@ export default function RequirementsClient({
         },
       )
       .subscribe();
+
+    console.log("[Realtime] Subscription status:", channel.state);
 
     // Fetch diagrams for the project
     supabase
@@ -278,6 +290,65 @@ export default function RequirementsClient({
     [],
   );
 
+  // Handle requirement deletion
+  const handleDelete = useCallback(async (id: string) => {
+    try {
+      await deleteRequirement(id);
+      // Optimistically update UI
+      setRequirements((prev) => prev.filter((req) => req.id !== id));
+    } catch (error) {
+      console.error("Failed to delete requirement:", error);
+      alert(
+        `Failed to delete requirement: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+  }, []);
+
+  // Handle text to requirements conversion success
+  const handleTextConversionSuccess = useCallback(() => {
+    // The realtime subscription will automatically update the UI
+    // No need to manually refresh
+  }, []);
+
+  // Handle requirement created from SSE stream
+  const handleRequirementCreated = useCallback((artifact: any) => {
+    const newReq = {
+      id: artifact.id,
+      req_id: artifact.content.id,
+      title: artifact.content.title,
+      type: artifact.content.type,
+      priority: artifact.content.priority,
+      status: artifact.content.status,
+      description: artifact.content.description || "",
+      links: artifact.content.links || [],
+      tags: artifact.content.metadata?.tags || [],
+    };
+    
+    console.log("[UI] Adding requirement from SSE:", newReq.title);
+    setRequirements((prev) => {
+      // Check if already exists (avoid duplicates from realtime)
+      if (prev.some(r => r.id === newReq.id)) {
+        return prev;
+      }
+      return [...prev, newReq];
+    });
+    
+    // Update progress
+    setGenerationProgress((prev) => prev + 1);
+  }, []);
+
+  // Handle generation start
+  const handleGenerationStart = useCallback(() => {
+    setIsGeneratingRequirements(true);
+    setGenerationProgress(0);
+  }, []);
+
+  // Handle generation complete
+  const handleGenerationComplete = useCallback(() => {
+    setIsGeneratingRequirements(false);
+    setGenerationProgress(0);
+  }, []);
+
   // Generate diagram suggestions from requirement changes (Requirement 10.1, 10.3)
   const handleGenerateSuggestions = useCallback(async () => {
     if (!selectedDiagramId) {
@@ -335,9 +406,56 @@ export default function RequirementsClient({
   return (
     <div className="flex gap-4">
       <div className="flex-1">
+        {/* AI Generation Progress Banner */}
+        {isGeneratingRequirements && (
+          <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950/30">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0">
+                <svg
+                  className="h-5 w-5 animate-spin text-blue-600 dark:text-blue-400"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                  AI is generating requirements...
+                </p>
+                <p className="text-xs text-blue-700 dark:text-blue-300">
+                  {generationProgress > 0
+                    ? `${generationProgress} requirement${generationProgress !== 1 ? "s" : ""} created so far`
+                    : "Analyzing your text and extracting requirements"}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Requirements</h2>
           <div className="flex items-center gap-2">
+            <Button
+              onClick={() => setShowTextToRequirementsDialog(true)}
+              size="sm"
+              variant="outline"
+            >
+              Convert Text to Requirements
+            </Button>
             {diagrams.length > 0 && (
               <>
                 <select
@@ -372,6 +490,7 @@ export default function RequirementsClient({
           onUpdate={handleUpdate}
           onCreate={handleCreate}
           onEditDetails={handleEditDetails}
+          onDelete={handleDelete}
         />
       </div>
 
@@ -381,6 +500,17 @@ export default function RequirementsClient({
         open={showDetailsDialog}
         onOpenChange={setShowDetailsDialog}
         onSave={handleSaveDetails}
+      />
+
+      {/* Text to requirements dialog */}
+      <TextToRequirementsDialog
+        projectId={projectId}
+        open={showTextToRequirementsDialog}
+        onOpenChange={setShowTextToRequirementsDialog}
+        onSuccess={handleTextConversionSuccess}
+        onRequirementCreated={handleRequirementCreated}
+        onGenerationStart={handleGenerationStart}
+        onGenerationComplete={handleGenerationComplete}
       />
 
       {/* Sync suggestions panel */}

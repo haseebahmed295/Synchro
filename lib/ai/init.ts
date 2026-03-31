@@ -24,14 +24,16 @@ export function initializeAI(): void {
 
   console.log("AI system initialized successfully");
   console.log("Available models:");
-  console.log("  - Gemini 3 Flash (OCR, multimodal)");
-  console.log("  - Claude Sonnet 4.6 (reasoning, architecture, validation)");
-  console.log("  - GPT-4o (validation fallback)");
+  console.log("  - GPT-5.4-nano (all tasks)");
 
   if (process.env.DEEPSEEK_API_KEY) {
-    console.log("  - DeepSeek-V3 (code generation)");
-  } else {
-    console.log("  - DeepSeek-V3 (not configured, will use Claude fallback)");
+    console.log("  - DeepSeek-V3 (optional)");
+  }
+  if (process.env.ANTHROPIC_API_KEY) {
+    console.log("  - Claude Sonnet 4.6 (optional)");
+  }
+  if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    console.log("  - Gemini 3 Flash (optional)");
   }
 }
 

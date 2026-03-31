@@ -47,8 +47,8 @@ export function getModelForTask(taskType: TaskType): LanguageModel {
         return openai(config.model);
 
       case "deepseek":
-        // DeepSeek uses OpenAI-compatible API
-        // Note: Configuration should be done via environment variables
+        // DeepSeek support (requires custom OpenAI configuration)
+        // Set OPENAI_BASE_URL=https://api.deepseek.com in environment
         return openai(config.model);
 
       default:
@@ -56,7 +56,7 @@ export function getModelForTask(taskType: TaskType): LanguageModel {
     }
   } catch (error) {
     console.error(`Failed to initialize ${config.provider} model`, error);
-    // Fallback to Claude Sonnet
+    // Fallback to DeepSeek
     return getFallbackModel();
   }
 }
@@ -65,74 +65,33 @@ export function getModelForTask(taskType: TaskType): LanguageModel {
  * Get model configuration based on task type
  */
 function getModelConfig(taskType: TaskType): ModelConfig {
-  switch (taskType) {
-    case "ocr":
-    case "multimodal":
-      // Gemini 3 Flash for OCR and multimodal extraction (Req 31.1)
-      return {
-        provider: "google",
-        model: "gemini-2.0-flash-exp",
-        maxTokens: 4000,
-        temperature: 0.3,
-      };
-
-    case "reasoning":
-    case "architecture":
-      // Claude Sonnet 4.6 for core reasoning and architecture (Req 31.2)
-      return {
-        provider: "anthropic",
-        model: "claude-sonnet-4-20250514",
-        maxTokens: 8000,
-        temperature: 0.5,
-      };
-
-    case "validation":
-      // Claude Sonnet 4.6 primary, GPT-5.2 for complex reasoning (Req 31.3)
-      return {
-        provider: "anthropic",
-        model: "claude-sonnet-4-20250514",
-        maxTokens: 8000,
-        temperature: 0.2,
-      };
-
-    case "code-generation":
-      // DeepSeek-V3 for code generation (Req 31.4)
-      return {
-        provider: "deepseek",
-        model: "deepseek-chat",
-        maxTokens: 16000,
-        temperature: 0.4,
-      };
-
-    default:
-      // Default to Claude Sonnet
-      return {
-        provider: "anthropic",
-        model: "claude-sonnet-4-20250514",
-        maxTokens: 8000,
-        temperature: 0.5,
-      };
-  }
+  // Use OpenAI GPT-5.4-nano for all tasks
+  return {
+    provider: "openai",
+    model: "gpt-5.4-nano",
+    maxTokens: 16000,
+    temperature: taskType === "validation" ? 0.2 : taskType === "code-generation" ? 0.4 : 0.5,
+  };
 }
 
 /**
  * Fallback model when primary model is unavailable (Req 31.5)
  */
 function getFallbackModel(): LanguageModel {
-  console.warn("Using fallback model: Claude Sonnet 4");
-  return anthropic("claude-sonnet-4-20250514");
+  console.warn("Using fallback model: GPT-5.4-nano");
+  return openai("gpt-5.4-nano");
 }
 
 /**
  * Get fallback model for validation tasks
- * Uses GPT-5.2 for complex abstract reasoning
+ * Uses GPT-4o as fallback
  */
 export function getValidationFallbackModel(): LanguageModel {
   try {
-    return openai("gpt-4o"); // Using GPT-4o as GPT-5.2 placeholder
+    return openai("gpt-5.4-nano");
   } catch (error) {
     console.error(
-      "Failed to initialize GPT model, using Claude fallback",
+      "Failed to initialize OpenAI model",
       error,
     );
     return getFallbackModel();
@@ -144,12 +103,14 @@ export function getValidationFallbackModel(): LanguageModel {
  */
 export function validateApiKeys(): { valid: boolean; missing: string[] } {
   const required = [
-    { key: "ANTHROPIC_API_KEY", name: "Anthropic" },
-    { key: "GOOGLE_GENERATIVE_AI_API_KEY", name: "Google" },
     { key: "OPENAI_API_KEY", name: "OpenAI" },
   ];
 
-  const optional = [{ key: "DEEPSEEK_API_KEY", name: "DeepSeek" }];
+  const optional = [
+    { key: "DEEPSEEK_API_KEY", name: "DeepSeek" },
+    { key: "ANTHROPIC_API_KEY", name: "Anthropic" },
+    { key: "GOOGLE_GENERATIVE_AI_API_KEY", name: "Google" },
+  ];
 
   const missing: string[] = [];
 

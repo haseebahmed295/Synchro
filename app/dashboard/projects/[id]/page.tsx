@@ -95,7 +95,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
         </Link>
 
         <Link
-          href={`/dashboard/projects/${id}/diagrams`}
+          href={`/projects/${id}/diagrams`}
           className="group rounded-lg border border-zinc-200 bg-white p-6 transition-all hover:border-zinc-300 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700"
         >
           <h3 className="text-lg font-semibold text-zinc-900 group-hover:text-zinc-700 dark:text-zinc-50 dark:group-hover:text-zinc-300">

@@ -4,9 +4,9 @@
  * Requirements: 9.1
  */
 
-export type DiagramType = "class" | "sequence" | "erd";
+export type DiagramType = "class" | "sequence" | "erd" | "deployment" | "flowchart";
 
-export type NodeType = "class" | "entity" | "actor" | "lifeline";
+export type NodeType = "class" | "entity" | "actor" | "lifeline" | "device" | "executionEnvironment" | "artifact" | "process" | "decision" | "terminal" | "io";
 
 export type EdgeType =
   | "association"
@@ -24,6 +24,8 @@ export interface DiagramNode {
     attributes?: string[];
     methods?: string[];
     stereotype?: string;
+    // deployment diagram: child node IDs nested inside this node
+    children?: string[];
   };
 }
 

@@ -15,27 +15,13 @@ export async function POST(request: NextRequest) {
   try {
     // Parse request body
     const body = await request.json();
-    const { requirementIds, diagramType, projectId } = body;
+    const { requirementIds, diagramType, projectId, diagramName } = body;
 
-    if (
-      !requirementIds ||
-      !Array.isArray(requirementIds) ||
-      requirementIds.length === 0
-    ) {
+    if (!diagramType || !["class", "sequence", "erd", "component", "deployment", "flowchart"].includes(diagramType)) {
       return NextResponse.json(
         {
           error:
-            'Missing or invalid "requirementIds" field (must be non-empty array)',
-        },
-        { status: 400 },
-      );
-    }
-
-    if (!diagramType || !["class", "sequence", "erd"].includes(diagramType)) {
-      return NextResponse.json(
-        {
-          error:
-            'Invalid "diagramType" field (must be "class", "sequence", or "erd")',
+            'Invalid "diagramType" field (must be "class", "sequence", "erd", "component", "deployment", or "flowchart")',
         },
         { status: 400 },
       );
@@ -74,12 +60,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch requirements from database
-    const { data: artifacts, error: fetchError } = await supabase
+    let query = supabase
       .from("artifacts")
       .select("id, content")
       .eq("project_id", projectId)
-      .eq("type", "requirement")
-      .in("id", requirementIds);
+      .eq("type", "requirement");
+
+    // If specific requirement IDs provided, filter by them
+    if (requirementIds && Array.isArray(requirementIds) && requirementIds.length > 0) {
+      query = query.in("id", requirementIds);
+    }
+
+    const { data: artifacts, error: fetchError } = await query;
 
     if (fetchError) {
       console.error("Failed to fetch requirements", fetchError);
@@ -91,13 +83,20 @@ export async function POST(request: NextRequest) {
 
     if (!artifacts || artifacts.length === 0) {
       return NextResponse.json(
-        { error: "No requirements found with provided IDs" },
+        { error: "No requirements found for this project" },
         { status: 404 },
       );
     }
 
-    // Extract requirement content
+    // Extract requirement content and create ID mapping
     const requirements = artifacts.map((artifact) => artifact.content);
+    const contentIdToArtifactId = new Map<string, string>();
+    
+    artifacts.forEach((artifact) => {
+      if (artifact.content?.id) {
+        contentIdToArtifactId.set(artifact.content.id, artifact.id);
+      }
+    });
 
     // Create Architect agent and generate diagram
     const architect = new ArchitectAgent();
@@ -130,11 +129,19 @@ export async function POST(request: NextRequest) {
       .insert({
         project_id: projectId,
         type: "diagram",
-        content: result.diagram,
+        content: {
+          diagram_metadata: {
+            id: result.diagram.id || crypto.randomUUID(),
+            type: diagramType,
+            name: diagramName || `${diagramType} Diagram`,
+          },
+          nodes: convertNodesToObjectFormat(result.diagram.nodes),
+          edges: convertEdgesToObjectFormat(result.diagram.edges),
+        },
         metadata: {
           diagramType,
           generationTime,
-          sourceRequirements: requirementIds,
+          sourceRequirements: requirementIds || artifacts.map(a => a.id),
         },
         version: 1,
         created_by: user.id,
@@ -150,23 +157,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store traceability links
+    // Store traceability links - map content IDs to artifact UUIDs
     if (result.traceabilityLinks.length > 0) {
-      const links = result.traceabilityLinks.map((link) => ({
-        source_id: link.sourceId,
-        target_id: link.targetId,
-        link_type: link.linkType,
-        confidence: link.confidence,
-        created_by: user.id,
-      }));
+      const links = result.traceabilityLinks
+        .map((link) => {
+          // Map requirement content ID to artifact UUID
+          const artifactId = contentIdToArtifactId.get(link.sourceId);
+          if (!artifactId) {
+            console.warn(`Could not find artifact ID for requirement ${link.sourceId}`);
+            return null;
+          }
+          
+          return {
+            source_id: artifactId, // Use artifact UUID instead of content ID
+            target_id: diagramArtifact.id, // Link to diagram artifact, not individual nodes
+            link_type: link.linkType,
+            confidence: link.confidence,
+            created_by: user.id,
+          };
+        })
+        .filter((link): link is NonNullable<typeof link> => link !== null);
 
-      const { error: linksError } = await supabase
-        .from("traceability_links")
-        .insert(links);
+      // Deduplicate links by source_id + target_id combination
+      const uniqueLinks = Array.from(
+        new Map(
+          links.map(link => [`${link.source_id}-${link.target_id}`, link])
+        ).values()
+      );
 
-      if (linksError) {
-        console.error("Failed to insert traceability links", linksError);
-        // Don't fail the request, just log the error
+      if (uniqueLinks.length > 0) {
+        const { error: linksError } = await supabase
+          .from("traceability_links")
+          .insert(uniqueLinks);
+
+        if (linksError) {
+          console.error("Failed to insert traceability links", linksError);
+          // Don't fail the request, just log the error
+        }
       }
     }
 
@@ -188,4 +215,36 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+/**
+ * Convert nodes array to object format for database storage
+ */
+function convertNodesToObjectFormat(nodes: any[]): Record<string, any> {
+  return nodes.reduce((acc, node) => {
+    acc[node.id] = {
+      id: node.id,
+      type: node.type,
+      position: node.position,
+      data: node.data,
+    };
+    return acc;
+  }, {} as Record<string, any>);
+}
+
+/**
+ * Convert edges array to object format for database storage
+ */
+function convertEdgesToObjectFormat(edges: any[]): Record<string, any> {
+  return edges.reduce((acc, edge) => {
+    acc[edge.id] = {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: edge.type,
+      label: edge.label,
+      multiplicity: edge.multiplicity,
+    };
+    return acc;
+  }, {} as Record<string, any>);
 }
