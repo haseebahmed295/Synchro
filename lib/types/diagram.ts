@@ -6,7 +6,12 @@
 
 export type DiagramType = "class" | "sequence" | "erd" | "deployment" | "flowchart";
 
-export type NodeType = "class" | "entity" | "actor" | "lifeline" | "device" | "executionEnvironment" | "artifact" | "process" | "decision" | "terminal" | "io";
+export type NodeType =
+  | "class" | "entity" | "actor" | "lifeline"
+  // deployment
+  | "node" | "executionEnvironment" | "component" | "artifact" | "interface"
+  // flowchart
+  | "process" | "decision" | "terminal" | "io";
 
 export type EdgeType =
   | "association"
