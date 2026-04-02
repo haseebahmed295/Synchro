@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 import { generateAIObject } from "../ai/client";
 import { computeLayout } from "../utils/diagram-layout";
-import type { Diagram, DiagramEdge, DiagramNode } from "../types/diagram";
+import type { Diagram, DiagramEdge, DiagramNode, NodeType } from "../types/diagram";
 import type { Requirement } from "./analyst";
 import type { TraceabilityLink } from "./types";
 
@@ -20,9 +20,11 @@ const DiagramGenerationSchema = z.object({
     z.object({
       id: z.string(),
       type: z.string().transform((t) => {
-          const valid = ["class", "entity", "actor", "lifeline", "device", "executionEnvironment", "artifact", "process", "decision", "terminal", "io"];
+          // "device" is a common AI hallucination — map it to the correct "node" type
+          if (t === "device") return "node";
+          const valid = ["class", "entity", "actor", "lifeline", "node", "executionEnvironment", "component", "artifact", "interface", "process", "decision", "terminal", "io"];
           return valid.includes(t) ? t : "class";
-        }) as z.ZodType<"class" | "entity" | "actor" | "lifeline" | "device" | "executionEnvironment" | "artifact" | "process" | "decision" | "terminal" | "io">,
+        }) as z.ZodType<NodeType>,
       position: z.object({
         x: z.number(),
         y: z.number(),
@@ -105,13 +107,14 @@ IMPORTANT: Return a JSON object with this exact structure:
   "nodes": [
     {
       "id": "string (unique identifier)",
-      "type": "class" | "entity" | "actor" | "lifeline",
+      "type": "<depends on diagram type — see system prompt for valid types>",
       "position": { "x": number, "y": number },
       "data": {
         "label": "string (display name)",
         "attributes": ["optional", "array", "of", "strings"],
         "methods": ["optional", "array", "of", "strings"],
-        "stereotype": "optional string"
+        "stereotype": "optional string",
+        "children": ["optional array of child node IDs — deployment diagrams only"]
       },
       "linkedRequirements": ["optional", "array", "of", "requirement", "ids"]
     }
@@ -147,7 +150,7 @@ CRITICAL:
       );
 
       // Filter out invalid edges (those without source or target)
-      const validEdges = result.edges.filter(edge => {
+      const validEdges = result.edges.filter((edge): edge is typeof edge & { source: string; target: string } => {
         if (!edge.source || !edge.target) {
           console.warn(`Skipping invalid edge: ${edge.id} - missing source or target`);
           return false;
@@ -162,13 +165,23 @@ CRITICAL:
         return true;
       });
 
-      // Compute proper layout — pass full node data so height estimation works
-      const aiPositions = new Map(result.nodes.map((n) => [n.id, n.position]));
-      const layoutPositions = computeLayout(
-        result.nodes.map((n) => ({ id: n.id, type: n.type, data: n.data })),
-        validEdges,
-        aiPositions,
-      );
+      // Compute proper layout — only for diagram types that benefit from the LR grid.
+      // Flowcharts use a top-to-bottom flow (AI positions are good as-is).
+      // Deployment diagrams handle layout in the converter's auto-spacing.
+      const useGridLayout = diagramType !== "flowchart" && diagramType !== "deployment";
+      let layoutPositions: Map<string, { x: number; y: number }>;
+
+      if (useGridLayout) {
+        const aiPositions = new Map(result.nodes.map((n) => [n.id, n.position]));
+        layoutPositions = computeLayout(
+          result.nodes.map((n) => ({ id: n.id, type: n.type, data: n.data })),
+          validEdges,
+          aiPositions,
+        );
+      } else {
+        // Use AI positions directly
+        layoutPositions = new Map(result.nodes.map((n) => [n.id, n.position]));
+      }
 
       // Create diagram with unique ID
       const diagramId = uuidv4();
@@ -324,7 +337,7 @@ Return a JSON array of links with: requirementId, nodeId, confidence, reasoning`
    * Get system prompt based on diagram type
    */
   private getSystemPromptForDiagramType(
-    diagramType: "class" | "sequence" | "erd" | "deployment" | "flowchart",
+    diagramType: "class" | "sequence" | "erd" | "deployment" | "flowchart" | "component",
   ): string {
     switch (diagramType) {
       case "class":
@@ -333,31 +346,33 @@ Return a JSON array of links with: requirementId, nodeId, confidence, reasoning`
 Your task is to generate well-structured class diagrams from requirements.
 
 NODE DIMENSIONS (fixed — do not exceed these):
-- Every node is exactly 200px wide and at most 220px tall
+- Every node is exactly 220px wide and at most 220px tall
 - Keep attributes to max 5 items, methods to max 4 items — truncate if needed
 
 STRICT POSITION RULES — LEFT TO RIGHT LAYOUT:
 Arrange nodes in columns from left to right based on dependency flow.
-- Column 0 (x=60):   Entry points — actors, controllers, API handlers (things that initiate)
-- Column 1 (x=320):  Services — business logic classes
-- Column 2 (x=580):  Domain entities — core data models
-- Column 3 (x=840):  Repositories / persistence layer
-- Column 4 (x=1100): Value objects, enums, helper types
+- Column 0 (x=60):   Entry points — controllers, API handlers (things that initiate)
+- Column 1 (x=360):  Services — business logic classes
+- Column 2 (x=660):  Domain entities — core data models
+- Column 3 (x=960):  Repositories / persistence layer
+- Column 4 (x=1260): Value objects, enums, helper types
 
-Within each column, stack nodes vertically with 260px between them: y=60, 320, 580, 840...
+Within each column, stack nodes vertically with 300px between them: y=60, 360, 660, 960...
 No two nodes may share the same (x, y) position.
 
 EXAMPLES:
-- A Controller at (60, 60) calls a Service at (320, 60) which uses an Entity at (580, 60)
-- A second Service at (320, 320) uses the same Entity at (580, 60) — edges cross columns cleanly
-- Repositories go at x=840, value objects at x=1100
+- A Controller at (60, 60) calls a Service at (360, 60) which uses an Entity at (660, 60)
+- A second Service at (360, 360) uses the same Entity at (660, 60) — edges cross columns cleanly
+- Repositories go at x=960, value objects at x=1260
+
+IMPORTANT: Generate at most 8-10 nodes total. Focus on the most important classes — do not create a node for every minor concept. Merge small helpers into their parent class.
 
 Guidelines:
 1. Assign each class to the correct column based on its role
-2. Keep attributes concise: "fieldName: type" format, max 5
-3. Keep methods concise: "methodName(): returnType" format, max 4
+2. Use UML visibility prefixes: "+fieldName: type" for public, "-fieldName: type" for private, "#fieldName: type" for protected
+3. Keep methods concise: "+methodName(): returnType" format, max 4
 4. Use appropriate relationships: inheritance, association, composition, aggregation, dependency
-5. Add stereotypes: <<service>>, <<entity>>, <<valueObject>>, <<repository>>, <<controller>>
+5. Add stereotypes: controller, service, entity, valueObject, repository, enum, interface
 6. Ensure all node and edge IDs are unique and descriptive`;
 
       case "sequence":
@@ -445,38 +460,123 @@ Guidelines:
 Your task is to generate deployment diagrams showing physical infrastructure and software deployment.
 
 NODE TYPES — use exactly these string values:
-- "device"               : physical/virtual machine, server, cloud node
-- "executionEnvironment" : runtime environment inside a device
-- "artifact"             : deployed software artifact (jar, war, exe, service)
+- "node"                 : physical/virtual machine, server, cloud node (the top-level container)
+- "executionEnvironment" : runtime environment inside a node (JVM, Docker, OS, etc.)
+- "component"            : a deployed software component (API, service module, etc.)
+- "artifact"             : a deployed software artifact (jar, war, exe, config file, etc.)
+- "interface"            : a provided/required interface (lollipop notation)
 
-NESTING via "children" array:
-- A device's "children" lists the IDs of executionEnvironments and artifacts directly inside it
-- An executionEnvironment's "children" lists the IDs of artifacts inside it
+CRITICAL — NESTING via "children" array:
+Every top-level "node" MUST contain child nodes. The whole point of a deployment diagram is showing WHAT runs WHERE.
+- A "node"'s data.children lists the IDs of executionEnvironments, components, and artifacts directly inside it
+- An "executionEnvironment"'s data.children lists the IDs of components and artifacts inside it
+- ALL child nodes MUST also appear as their own entries in the top-level "nodes" array
 - Child positions are RELATIVE to their parent's top-left corner
 
+CONCRETE EXAMPLE — a web server with a runtime and an artifact:
+{
+  "nodes": [
+    {
+      "id": "web_server",
+      "type": "node",
+      "position": { "x": 60, "y": 60 },
+      "data": {
+        "label": "Web Server",
+        "stereotype": "node",
+        "children": ["tomcat_runtime", "api_component"]
+      }
+    },
+    {
+      "id": "tomcat_runtime",
+      "type": "executionEnvironment",
+      "position": { "x": 16, "y": 50 },
+      "data": {
+        "label": "Tomcat 10",
+        "children": ["app_war"]
+      }
+    },
+    {
+      "id": "app_war",
+      "type": "artifact",
+      "position": { "x": 12, "y": 44 },
+      "data": { "label": "app.war" }
+    },
+    {
+      "id": "api_component",
+      "type": "component",
+      "position": { "x": 16, "y": 200 },
+      "data": { "label": "REST API" }
+    }
+  ]
+}
+Notice: "tomcat_runtime" and "api_component" are children of "web_server", "app_war" is a child of "tomcat_runtime". ALL four nodes appear in the flat nodes array.
+
 POSITION RULES:
-Device nodes (top-level only) — place on a loose grid, no overlap:
+Top-level "node" containers — place on a loose grid, no overlap:
   x = 60, 420, 780  (columns, 360px apart)
   y = 60, 380       (rows, 320px apart)
 
-Inside a device, children stack vertically starting at y=50 (below the header):
+Inside a "node" container, children stack vertically starting at y=50 (below the header):
   First child:  x=16, y=50
   Second child: x=16, y=150
   Third child:  x=16, y=250
 
-Inside an executionEnvironment, artifacts stack at:
-  First artifact:  x=12, y=44
-  Second artifact: x=12, y=84
+Inside an executionEnvironment, nested items stack at:
+  First item:  x=12, y=44
+  Second item: x=12, y=104
 
-Device size must accommodate children — use minWidth=280, and height = 60 + (number_of_children * 100)
+Container ("node") size must accommodate children — use minWidth=280, and height = 60 + (number_of_children * 100)
 
 EDGES:
-- Only between device-level nodes
+- Only between top-level "node" containers
 - type: "association"
 - label: protocol (HTTPS, TCP, JDBC, gRPC, etc.)
 
-OUTPUT exactly 4-6 device nodes. Keep it focused.
+OUTPUT exactly 4-6 top-level "node" containers, each with at least 1-2 children inside.
+Do NOT use "device" — the correct type name is "node".
+Do NOT create empty containers — every "node" must have children showing what is deployed inside it.
 Ensure all IDs are unique snake_case strings.`;
+      case "component":
+        return `You are an expert software architect specializing in UML Component diagrams.
+
+Your task is to generate well-structured component diagrams that show how the system is wired together.
+
+NODE DIMENSIONS:
+- Every component node is 240px wide.
+
+STRICT POSITION RULES — LEFT TO RIGHT LAYOUT:
+Arrange nodes in columns from left to right based on dependencies (requirer -> provider).
+- Column 0 (x=60): Client applications, entry points
+- Column 1 (x=360): API Gateways, edge components
+- Column 2 (x=660): Core services, business logic components
+- Column 3 (x=960): Data access components, integration adapters
+- Column 4 (x=1260): External systems, databases
+
+Within each column, stack nodes vertically with 300px between them: y=60, 360, 660, 960...
+No two nodes may share the same (x, y) position. Generate at most 8-10 nodes.
+
+UML COMPONENT RULES:
+1. Component: Main physical/logical modules. Use "component" type.
+2. Provided Interfaces: Services the component OFFERS to others. Add these to the "attributes" array.
+3. Required Interfaces: Services the component NEEDS from others. Add these to the "methods" array.
+4. Standalone Interfaces: You may use "interface" type for shared interfaces, but generally attach them to components.
+
+Example Node properties:
+{
+  "id": "payment_service",
+  "type": "component",
+  "position": { "x": 660, "y": 60 },
+  "data": {
+    "label": "Payment Processing",
+    "attributes": ["IProcessPayment", "IRefund"], // Provided (lollipop)
+    "methods": ["IBankGateway", "IAuditLog"]      // Required (socket)
+  }
+}
+
+Guidelines:
+1. Focus on high-level modular architecture, not class-level details.
+2. Edges generally represent assembly connectors (wiring a required interface to a provided interface).
+3. Use "dependency" for edges.`;
 
       default:
         return "You are an expert software architect.";

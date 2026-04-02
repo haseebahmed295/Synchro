@@ -19,8 +19,8 @@ export interface LayoutEdge {
 interface Position { x: number; y: number }
 
 // LR grid: columns at x=60,320,580,840,1100 — rows at y=60,320,580,840...
-const COL_STEP = 260;
-const ROW_STEP = 260;
+const COL_STEP = 300;
+const ROW_STEP = 300;
 const H_PAD = 60;
 const V_PAD = 60;
 

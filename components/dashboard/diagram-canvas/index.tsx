@@ -24,6 +24,7 @@ import { ColumnEditorDialog, ContextMenu, EditLabelDialog, type CtxTarget } from
 import { ClassNode } from "./nodes-class";
 import { LifelineNode, SequenceEdge } from "./nodes-sequence";
 import { ArtifactNode, ComponentNode, DeploymentNode, ExecEnvNode, InterfaceNode } from "./nodes-deployment";
+import { ComponentDiagramNode, ProvidedInterfaceNode, RequiredInterfaceNode } from "./nodes-component";
 import { ErdTableNode } from "./nodes-erd";
 import { FlowDecision, FlowIO, FlowProcess, FlowTerminal } from "./nodes-flowchart";
 import { toFlowEdges, toFlowNodes } from "./converters";
@@ -87,6 +88,10 @@ const nodeTypes = {
   component: ComponentNode,
   artifact: ArtifactNode,
   interface: InterfaceNode,
+  // component diagram
+  componentDiagram: ComponentDiagramNode,
+  providedInterface: ProvidedInterfaceNode,
+  requiredInterface: RequiredInterfaceNode,
   // flowchart
   process: FlowProcess,
   decision: FlowDecision,
@@ -109,6 +114,9 @@ const NODE_PALETTE: Record<string, Array<{ type: string; label: string; defaultL
   ],
   deployment: [
     { type: "node", label: "Node", defaultLabel: "Server", color: "#1e40af" },
+  ],
+  component: [
+    { type: "component",  label: "Component", defaultLabel: "Component", color: "#6366f1" },
   ],
   flowchart: [
     { type: "terminal",  label: "Start/End", defaultLabel: "Start",       color: "#16a34a" },
@@ -142,8 +150,9 @@ export function DiagramCanvas({
   const isDeploy = diagramType === "deployment";
   const isErd = diagramType === "erd";
   const isFlow = diagramType === "flowchart";
+  const isComp = diagramType === "component";
 
-  const [flowNodes, setFlowNodes] = useState<Node[]>(() => toFlowNodes(diagramNodes, isSeq, isDeploy));
+  const [flowNodes, setFlowNodes] = useState<Node[]>(() => toFlowNodes(diagramNodes, isSeq, isDeploy, isComp));
   const [flowEdges, setFlowEdges] = useState<Edge[]>(() => toFlowEdges(diagramEdges, isSeq, isErd, isFlow));
 
   // Keep a mutable ref to the latest flowNodes so callbacks never read stale state
@@ -187,7 +196,8 @@ export function DiagramCanvas({
       const deploy = diagramTypeRef.current === "deployment";
       const erd = diagramTypeRef.current === "erd";
       const flow = diagramTypeRef.current === "flowchart";
-      setFlowNodes(toFlowNodes(diagramNodes, seq, deploy));
+      const comp = diagramTypeRef.current === "component";
+      setFlowNodes(toFlowNodes(diagramNodes, seq, deploy, comp));
       setFlowEdges(toFlowEdges(diagramEdges, seq, erd, flow));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -328,11 +338,11 @@ export function DiagramCanvas({
   // Position is relative to the parent — stacked below existing siblings.
   // Parent expansion is handled entirely by useAutoResizeContainers.
   const handleAddDeployChild = useCallback((parentId: string, type: string, defaultLabel: string) => {
-    const HEADER_H = 52;
-    const CHILD_H: Record<string, number> = { artifact: 52, component: 60, interface: 64, executionEnvironment: 100, node: 120 };
-    const CHILD_W = 220;
-    const CHILD_GAP = 10;
-    const CHILD_PAD = 12;
+    const HEADER_H = 56;
+    const CHILD_H: Record<string, number> = { artifact: 56, component: 64, interface: 68, executionEnvironment: 100, node: 120 };
+    const CHILD_W = 260;
+    const CHILD_GAP = 12;
+    const CHILD_PAD = 16;
 
     const childH = CHILD_H[type] ?? 52;
     const rfType = type === "node" ? "deploymentNode" : type;

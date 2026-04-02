@@ -4,7 +4,7 @@
  * Requirements: 9.1
  */
 
-export type DiagramType = "class" | "sequence" | "erd" | "deployment" | "flowchart";
+export type DiagramType = "class" | "sequence" | "erd" | "deployment" | "component" | "flowchart";
 
 export type NodeType =
   | "class" | "entity" | "actor" | "lifeline"
