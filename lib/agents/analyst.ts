@@ -249,7 +249,7 @@ Rules for dependencies (IMPORTANT — reference the temp IDs you just generated 
           await onRequirement(requirementWithMetadata);
           counter++;
         },
-        (deps) => { capturedDependencies = deps ?? []; },
+        (result) => { capturedDependencies = result?.dependencies ?? []; },
       );
 
       return capturedDependencies;

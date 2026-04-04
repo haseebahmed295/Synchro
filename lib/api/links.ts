@@ -24,20 +24,22 @@ export interface TraceabilityLinkRow {
 export async function getLinksForProject(projectId: string): Promise<TraceabilityLinkRow[]> {
   const supabase = createClient();
 
+  // Fetch diagram artifact IDs for this project first, then filter links by target_id.
+  // Filtering on a joined table column via .eq("artifacts.project_id") doesn't work in PostgREST.
+  const { data: artifacts, error: artifactsError } = await supabase
+    .from("artifacts")
+    .select("id")
+    .eq("project_id", projectId)
+    .eq("type", "diagram");
+
+  if (artifactsError) throw new Error(`Failed to fetch artifacts: ${artifactsError.message}`);
+  const diagramIds = (artifacts || []).map((a) => a.id);
+  if (diagramIds.length === 0) return [];
+
   const { data, error } = await supabase
     .from("traceability_links")
-    .select(`
-      id,
-      source_id,
-      target_id,
-      target_node_id,
-      link_type,
-      confidence,
-      created_at,
-      created_by,
-      source:artifacts!source_id(project_id)
-    `)
-    .eq("artifacts.project_id", projectId)
+    .select("id, source_id, target_id, target_node_id, link_type, confidence, created_at, created_by")
+    .in("target_id", diagramIds)
     .not("target_node_id", "is", null);
 
   if (error) throw new Error(`Failed to fetch links: ${error.message}`);

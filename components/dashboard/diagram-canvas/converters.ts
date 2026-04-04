@@ -1,19 +1,63 @@
 import { MarkerType, type Edge, type Node } from "@xyflow/react";
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
-import { SEQ_COL_SPACING, SEQ_MSG_SPACING, SEQ_MSG_START_Y } from "./nodes-sequence";
+import { computeActivations, SEQ_COL_SPACING, SEQ_LIFELINE_HEIGHT, SEQ_MSG_SPACING, SEQ_MSG_START_Y } from "./nodes-sequence";
 
-export function toFlowNodes(diagramNodes: DiagramNode[], isSeq: boolean, isDeploy: boolean, isComponent?: boolean): Node[] {
+export function toFlowNodes(diagramNodes: DiagramNode[], isSeq: boolean, isDeploy: boolean, isComponent?: boolean, diagramEdges?: DiagramEdge[]): Node[] {
   if (isSeq) {
     const actors = diagramNodes.filter((n) => n.type === "actor");
-    const lifelines = diagramNodes.filter((n) => n.type !== "actor");
-    return [...actors, ...lifelines].map((n, i) => ({
-      id: n.id,
-      type: "lifeline",
-      position: { x: 60 + i * SEQ_COL_SPACING, y: 40 },
-      data: { label: n.data.label },
-      draggable: true,
+    const lifelines = diagramNodes.filter((n) => n.type !== "actor" && n.type !== "fragment");
+    const fragments = diagramNodes.filter((n) => n.type === "fragment");
+
+    // Pre-compute activation boxes from edges
+    const edgesForActivation = (diagramEdges ?? []).map((e, i) => ({
+      source: e.source,
+      target: e.target,
+      data: {
+        msgY: e.msgY ?? (SEQ_MSG_START_Y + i * SEQ_MSG_SPACING),
+        msgType: e.msgType ?? "sync",
+      },
     }));
+    const NODE_Y = 40; // lifeline nodes are always placed at y=40
+    const activationMap = computeActivations(edgesForActivation, NODE_Y);
+
+    // Compute required lifeline height from the max msgY across all edges
+    const maxMsgY = edgesForActivation.reduce((max, e) => Math.max(max, (e.data.msgY as number) ?? SEQ_MSG_START_Y), SEQ_MSG_START_Y);
+    // Add padding below the last message, subtract NODE_Y since height is relative to node top
+    const lifelineHeight = Math.max(SEQ_LIFELINE_HEIGHT, maxMsgY - NODE_Y + 120);
+
+    return [
+      ...([...actors, ...lifelines].map((n, i) => ({
+        id: n.id,
+        type: "lifeline",
+        position: { x: 60 + i * SEQ_COL_SPACING, y: NODE_Y },
+        data: {
+          label: n.data.label,
+          isActor: actors.some((a) => a.id === n.id),
+          activations: activationMap.get(n.id) ?? [],
+          lifelineHeight,
+        },
+        draggable: true,
+        dragHandle: ".lifeline-drag-x-only",
+      }))),
+      ...fragments.map((n) => ({
+        id: n.id,
+        type: "fragment",
+        position: n.position ?? { x: 100, y: 150 },
+        data: {
+          label: n.data.label,
+          kind: n.data.stereotype ?? "alt",
+          condition: n.data.attributes?.[0] ?? "",
+        },
+        draggable: true,
+        style: {
+          width: (n.data as any).width ?? 400,
+          height: (n.data as any).height ?? 120,
+        },
+        zIndex: -1,
+      })),
+    ];
   }
+
 
   if (isDeploy) {
     // Use ReactFlow parentId nesting — children positions are relative to parent.
@@ -22,14 +66,14 @@ export function toFlowNodes(diagramNodes: DiagramNode[], isSeq: boolean, isDeplo
     const CHILD_PAD = 16;
     const HEADER_H = 56; // header height for containers
     const CHILD_H: Record<string, number> = {
-      artifact: 56,
-      component: 64,
+      artifact: 68,
+      component: 80,
       interface: 68,
-      executionEnvironment: 100,
-      node: 120,
+      executionEnvironment: 120,
+      node: 140,
     };
     const CHILD_W = 260;
-    const CHILD_GAP = 12;
+    const CHILD_GAP = 16;
     const TOP_LEVEL_GAP = 60; // gap between top-level nodes
 
     // Build parent→children map from data.children
@@ -199,34 +243,57 @@ export function toFlowNodes(diagramNodes: DiagramNode[], isSeq: boolean, isDeplo
   }));
 }
 
-export function toFlowEdges(diagramEdges: DiagramEdge[], isSeq: boolean, isErd: boolean, isFlow: boolean): Edge[] {
+export function toFlowEdges(diagramEdges: DiagramEdge[], isSeq: boolean, isErd: boolean, isFlow: boolean, isComponent?: boolean): Edge[] {
   if (isSeq) {
-    return diagramEdges.map((e, i) => ({
+    // Sort by msgY (vertical position) to derive execution order
+    const sorted = [...diagramEdges].sort((a, b) => {
+      const aY = a.msgY ?? SEQ_MSG_START_Y;
+      const bY = b.msgY ?? SEQ_MSG_START_Y;
+      return aY - bY;
+    });
+    return sorted.map((e, i) => ({
       id: e.id,
       source: e.source,
       target: e.target,
       type: "sequence",
       label: e.label ?? "",
-      data: { msgY: SEQ_MSG_START_Y + i * SEQ_MSG_SPACING },
+      data: {
+        msgY: e.msgY ?? (SEQ_MSG_START_Y + i * SEQ_MSG_SPACING),
+        msgType: e.msgType ?? "sync",
+        order: i + 1,
+      },
       animated: false,
     }));
   }
 
+  // ─── Component diagram edges — dashed dependency with open arrow ────────────
+  if (isComponent) {
+    return diagramEdges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      type: "smoothstep",
+      label: e.label ?? undefined,
+      style: { stroke: "#6366f1", strokeWidth: 1.5, strokeDasharray: "6 3" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#6366f1", width: 14, height: 14 },
+      labelStyle: { fill: "#6366f1", fontWeight: 600, fontSize: 10, fontFamily: "'JetBrains Mono', monospace" },
+      labelBgStyle: { fill: "white", fillOpacity: 0.9 },
+      ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}),
+      ...(e.targetHandle ? { targetHandle: e.targetHandle } : {}),
+    }));
+  }
+
   if (isErd) {
-    return diagramEdges.map((e) => {
-      const edgeLabel = e.multiplicity
-        ? `${e.multiplicity.source ?? "1"}:${e.multiplicity.target ?? "*"}`
-        : e.label ?? undefined;
-      return {
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        label: edgeLabel,
-        type: "smoothstep",
-        style: { stroke: "#94a3b8", strokeWidth: 1.5 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8", width: 12, height: 12 },
-      };
-    });
+    return diagramEdges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      type: "erdEdge",
+      data: {
+        sourceMult: e.multiplicity?.source ?? "1",
+        targetMult: e.multiplicity?.target ?? "0..*",
+      },
+    }));
   }
 
   if (isFlow) {
@@ -239,22 +306,27 @@ export function toFlowEdges(diagramEdges: DiagramEdge[], isSeq: boolean, isErd: 
         source: e.source,
         target: e.target,
         label: e.label,
-        type: "default",
+        type: "smoothstep",
         animated: false,
-        style: { stroke: color, strokeWidth: 2, strokeDasharray: "6 3" },
+        style: { stroke: color, strokeWidth: 2 },
         markerEnd: { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
-        labelStyle: { fill: color, fontWeight: 600, fontSize: 11 },
-        labelBgStyle: { fill: "white", fillOpacity: 0.85 },
+        labelStyle: { fill: color, fontWeight: 700, fontSize: 11 },
+        labelBgStyle: { fill: "white", fillOpacity: 1 },
+        labelBgPadding: [4, 6] as [number, number],
+        labelBgBorderRadius: 4,
+        ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}),
       };
     });
   }
 
-  // Class diagram edges / deployment communication paths
+  // Class diagram edges — use custom UmlClassEdge type
+  // Deployment communication paths fall through here too; they have no type set
+  // so we detect them by checking if the edge type is a known UML relationship.
+  const UML_TYPES = new Set(["association", "inheritance", "composition", "aggregation", "dependency"]);
   return diagramEdges.map((e) => {
-    const isInheritance = e.type === "inheritance";
-    const isDependency = e.type === "dependency";
+    const isUml = UML_TYPES.has(e.type ?? "");
     // Deployment communication path: solid line, no arrowhead
-    if (!isInheritance && !isDependency && e.label === undefined) {
+    if (!isUml) {
       return {
         id: e.id,
         source: e.source,
@@ -267,12 +339,12 @@ export function toFlowEdges(diagramEdges: DiagramEdge[], isSeq: boolean, isErd: 
       id: e.id,
       source: e.source,
       target: e.target,
-      label: e.label,
-      animated: isDependency,
-      style: { stroke: "#374151", strokeWidth: 1.5, strokeDasharray: isDependency ? "5,3" : undefined },
-      markerEnd: isInheritance
-        ? { type: MarkerType.ArrowClosed, color: "#374151" }
-        : { type: MarkerType.Arrow, color: "#374151" },
+      type: "umlClass",
+      data: {
+        relType: e.type ?? "association",
+        sourceMultiplicity: e.multiplicity?.source ?? "",
+        targetMultiplicity: e.multiplicity?.target ?? "",
+      },
     };
   });
 }

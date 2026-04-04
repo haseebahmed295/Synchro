@@ -219,9 +219,10 @@ export interface ColumnEditorProps {
   columns: string[];
   onSave: (columns: string[]) => void;
   onClose: () => void;
+  mode?: "column" | "attribute" | "method" | "interface";
 }
 
-export function ColumnEditorDialog({ tableName, columns, onSave, onClose }: ColumnEditorProps) {
+export function ColumnEditorDialog({ tableName, columns, onSave, onClose, mode = "column" }: ColumnEditorProps) {
   const [rows, setRows] = useState<string[]>(columns.length > 0 ? [...columns] : [""]);
 
   const update = (i: number, val: string) =>
@@ -239,21 +240,47 @@ export function ColumnEditorDialog({ tableName, columns, onSave, onClose }: Colu
 
   const handleSave = () => onSave(rows.filter((r) => r.trim() !== ""));
 
+  const isMethod = mode === "method";
+  const isAttribute = mode === "attribute";
+  const isInterface = mode === "interface";
+
+  const title = isInterface ? tableName
+    : isMethod ? `Edit Methods — ${tableName}`
+    : isAttribute ? `Edit Attributes — ${tableName}`
+    : `Edit Columns — ${tableName}`;
+
+  const helperText = isInterface
+    ? <>Format: <code style={{ background: "#f3f4f6", padding: "1px 4px", borderRadius: 3 }}>InterfaceName</code>&nbsp;— e.g. <code style={{ background: "#f3f4f6", padding: "1px 4px", borderRadius: 3 }}>IAuthService</code>, <code style={{ background: "#f3f4f6", padding: "1px 4px", borderRadius: 3 }}>IPaymentGateway</code></>
+    : isMethod
+    ? <>Format: <code style={{ background: "#f3f4f6", padding: "1px 4px", borderRadius: 3 }}>+&nbsp;methodName(param:&nbsp;Type):&nbsp;ReturnType</code>&nbsp;· Use +, -, # for visibility</>
+    : isAttribute
+    ? <>Format: <code style={{ background: "#f3f4f6", padding: "1px 4px", borderRadius: 3 }}>+&nbsp;name:&nbsp;Type</code>&nbsp;· Use +&nbsp;public, -&nbsp;private, #&nbsp;protected</>
+    : <>Format: <code style={{ background: "#f3f4f6", padding: "1px 4px", borderRadius: 3 }}>column_name: type</code>&nbsp;· Prefix with 🔑 for primary key</>;
+
+  const placeholder = (i: number) => isInterface
+    ? (i === 0 ? "IAuthService" : "InterfaceName")
+    : isMethod
+    ? (i === 0 ? "+ calculateTotal(tax: Float): Float" : "+ methodName(param: Type): ReturnType")
+    : isAttribute
+    ? (i === 0 ? "+ id: Int" : "+ name: Type")
+    : (i === 0 ? "🔑 id: integer" : "column_name: type");
+
+  const addLabel = isInterface ? "+ Add Interface" : isMethod ? "+ Add Method" : isAttribute ? "+ Add Attribute" : "+ Add column";
+
   return (
     <>
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 1001 }} onClick={onClose} />
       <div style={{
         position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
         background: "#fff", borderRadius: 10, padding: 24, zIndex: 1002,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.18)", width: 420, maxHeight: "80vh",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.18)", width: 460, maxHeight: "80vh",
         display: "flex", flexDirection: "column", fontFamily: "system-ui, sans-serif",
       }}>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4, color: "#111827" }}>
-          Edit Columns — {tableName}
+          {title}
         </div>
         <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 14 }}>
-          Format: <code style={{ background: "#f3f4f6", padding: "1px 4px", borderRadius: 3 }}>column_name: type</code>
-          &nbsp;· Prefix with 🔑 for primary key
+          {helperText}
         </div>
         <div style={{ overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
           {rows.map((row, i) => (
@@ -263,7 +290,7 @@ export function ColumnEditorDialog({ tableName, columns, onSave, onClose }: Colu
                 value={row}
                 onChange={(e) => update(i, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(e, i)}
-                placeholder={i === 0 ? "🔑 id: integer" : "column_name: type"}
+                placeholder={placeholder(i)}
                 style={{
                   flex: 1, padding: "6px 10px", border: "1.5px solid #d1d5db",
                   borderRadius: 6, fontSize: 12, outline: "none", fontFamily: "monospace",
@@ -287,7 +314,7 @@ export function ColumnEditorDialog({ tableName, columns, onSave, onClose }: Colu
             background: "#f9fafb", cursor: "pointer", fontSize: 12, color: "#6b7280", width: "100%",
           }}
         >
-          + Add column
+          {addLabel}
         </button>
         <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
           <button onClick={onClose} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", fontSize: 13 }}>Cancel</button>

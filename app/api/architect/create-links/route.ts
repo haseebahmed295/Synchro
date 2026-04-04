@@ -153,7 +153,7 @@ export async function POST(request: NextRequest) {
 
       const { data: insertedLinks, error: linksError } = await supabase
         .from("traceability_links")
-        .insert(links)
+        .upsert(links, { ignoreDuplicates: true })
         .select();
 
       if (linksError) {

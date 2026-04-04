@@ -11,7 +11,9 @@ export type NodeType =
   // deployment
   | "node" | "executionEnvironment" | "component" | "artifact" | "interface"
   // flowchart
-  | "process" | "decision" | "terminal" | "io";
+  | "process" | "decision" | "terminal" | "io"
+  // sequence
+  | "fragment";
 
 export type EdgeType =
   | "association"
@@ -44,6 +46,15 @@ export interface DiagramEdge {
     source?: string;
     target?: string;
   };
+  // sequence diagram message type
+  msgType?: "sync" | "return" | "async";
+  // sequence diagram vertical position
+  msgY?: number;
+  // sequence diagram execution order (1-based, derived from msgY sort)
+  order?: number;
+  // component diagram: specific handle IDs for per-interface connections
+  sourceHandle?: string;
+  targetHandle?: string;
 }
 
 export interface Diagram {

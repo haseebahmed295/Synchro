@@ -22,7 +22,7 @@ const DiagramGenerationSchema = z.object({
       type: z.string().transform((t) => {
           // "device" is a common AI hallucination — map it to the correct "node" type
           if (t === "device") return "node";
-          const valid = ["class", "entity", "actor", "lifeline", "node", "executionEnvironment", "component", "artifact", "interface", "process", "decision", "terminal", "io"];
+          const valid = ["class", "entity", "actor", "lifeline", "fragment", "node", "executionEnvironment", "component", "artifact", "interface", "process", "decision", "terminal", "io"];
           return valid.includes(t) ? t : "class";
         }) as z.ZodType<NodeType>,
       position: z.object({
@@ -35,6 +35,12 @@ const DiagramGenerationSchema = z.object({
         methods: z.array(z.string()).optional(),
         stereotype: z.string().optional(),
         children: z.array(z.string()).optional(),
+        abstract: z.boolean().optional(),
+        condition: z.string().optional(),
+        kind: z.string().optional(),
+        color: z.string().optional(),
+        height: z.number().optional(),
+        width: z.number().optional(),
       }),
       linkedRequirements: z.array(z.string()).optional(),
     }),
@@ -58,6 +64,13 @@ const DiagramGenerationSchema = z.object({
           target: z.string().optional(),
         })
         .optional(),
+      // Sequence diagram message type
+      msgType: z.enum(["sync", "return", "async"]).optional(),
+      // Sequence diagram vertical ordering (index in array = execution order)
+      msgY: z.number().optional(),
+      // Component diagram: per-interface handle IDs
+      sourceHandle: z.string().optional(),
+      targetHandle: z.string().optional(),
     }),
   ),
   reasoning: z.union([z.string(), z.array(z.string())]), // Accept string or array
@@ -97,7 +110,7 @@ Priority: ${req.priority}
 
 Instructions:
 1. Generate unique IDs for all nodes and edges (use descriptive names like "USER_CLASS", "AUTH_ENTITY", etc.)
-2. For each node, specify which requirements it relates to in the linkedRequirements array
+2. For EVERY node, populate the linkedRequirements array with the IDs of requirements that node implements or relates to — this is MANDATORY, not optional. Every node must have at least one linked requirement.
 3. Generate positions following the STRICT layout rules in the system prompt for this diagram type
 4. Create appropriate relationships between nodes based on requirement descriptions
 5. Include reasoning explaining your design decisions
@@ -114,9 +127,11 @@ IMPORTANT: Return a JSON object with this exact structure:
         "attributes": ["optional", "array", "of", "strings"],
         "methods": ["optional", "array", "of", "strings"],
         "stereotype": "optional string",
-        "children": ["optional array of child node IDs — deployment diagrams only"]
+        "children": ["optional array of child node IDs — deployment diagrams only"],
+        "abstract": "optional boolean — class diagrams: true for abstract classes and interfaces",
+        "color": "optional hex string — boundary nodes only (e.g. '#6366f1')"
       },
-      "linkedRequirements": ["optional", "array", "of", "requirement", "ids"]
+      "linkedRequirements": ["REQUIRED — list the requirement IDs (e.g. REQ_001) this node implements or relates to. Must not be empty."]
     }
   ],
   "edges": [
@@ -129,7 +144,10 @@ IMPORTANT: Return a JSON object with this exact structure:
       "multiplicity": {
         "source": "optional string like '1' or '0..*'",
         "target": "optional string like '1' or '0..*'"
-      }
+      },
+      "msgType": "optional — sequence diagrams only: 'sync' | 'return' | 'async'",
+      "sourceHandle": "optional — component diagrams only: 'provided-<InterfaceName>'",
+      "targetHandle": "optional — component diagrams only: 'required-<InterfaceName>'"
     }
   ],
   "reasoning": "string explaining your design decisions"
@@ -139,7 +157,9 @@ CRITICAL:
 - Every edge MUST have both "source" and "target" fields that reference existing node IDs
 - "reasoning" MUST be a single string, not an array
 - All node IDs must be unique
-- All edge source/target must reference existing node IDs`;
+- All edge source/target must reference existing node IDs
+- CLASS DIAGRAMS: You MUST use the correct edge "type" — inheritance/composition/aggregation/dependency/association. Do NOT use "association" for everything. See the system prompt decision table.
+- linkedRequirements MUST be populated for every node — use the exact requirement IDs from the input (e.g. "REQ_001"). Never leave it empty or omit it.`;
 
     try {
       const result = await generateAIObject(
@@ -164,6 +184,33 @@ CRITICAL:
         }
         return true;
       });
+
+      // Post-process class diagram edges: infer better relationship types when AI defaults everything to "association"
+      if (diagramType === "class") {
+        const allAssociation = validEdges.every(e => e.type === "association");
+        if (allAssociation) {
+          const nodeMap = new Map(result.nodes.map(n => [n.id, n]));
+          for (const edge of validEdges) {
+            const src = nodeMap.get(edge.source);
+            const tgt = nodeMap.get(edge.target);
+            if (!src || !tgt) continue;
+            const srcSt = src.data.stereotype ?? "";
+            const tgtSt = tgt.data.stereotype ?? "";
+            // Controller/Service → Service/Repository = dependency
+            if (["controller", "service"].includes(srcSt) && ["service", "repository"].includes(tgtSt)) {
+              (edge as any).type = "dependency";
+            }
+            // Service/Repository → entity = association with multiplicity
+            else if (["service", "repository"].includes(srcSt) && tgtSt === "entity") {
+              (edge as any).type = "association";
+            }
+            // interface/abstract → concrete = inheritance
+            else if (tgt.data.abstract || ["interface", "abstract"].includes(tgtSt)) {
+              (edge as any).type = "inheritance";
+            }
+          }
+        }
+      }
 
       // Compute proper layout — only for diagram types that benefit from the LR grid.
       // Flowcharts use a top-to-bottom flow (AI positions are good as-is).
@@ -346,8 +393,9 @@ Return a JSON array of links with: requirementId, nodeId, confidence, reasoning`
 Your task is to generate well-structured class diagrams from requirements.
 
 NODE DIMENSIONS (fixed — do not exceed these):
-- Every node is exactly 220px wide and at most 220px tall
+- Every node is exactly 280px wide and at most 280px tall
 - Keep attributes to max 5 items, methods to max 4 items — truncate if needed
+- Keep member text concise — long strings will be truncated with ellipsis in the UI
 
 STRICT POSITION RULES — LEFT TO RIGHT LAYOUT:
 Arrange nodes in columns from left to right based on dependency flow.
@@ -360,36 +408,95 @@ Arrange nodes in columns from left to right based on dependency flow.
 Within each column, stack nodes vertically with 300px between them: y=60, 360, 660, 960...
 No two nodes may share the same (x, y) position.
 
-EXAMPLES:
-- A Controller at (60, 60) calls a Service at (360, 60) which uses an Entity at (660, 60)
-- A second Service at (360, 360) uses the same Entity at (660, 60) — edges cross columns cleanly
-- Repositories go at x=960, value objects at x=1260
+IMPORTANT: Generate at most 8-10 nodes total. Focus on the most important classes.
 
-IMPORTANT: Generate at most 8-10 nodes total. Focus on the most important classes — do not create a node for every minor concept. Merge small helpers into their parent class.
+CLASS NODE RULES:
+1. Use UML visibility prefixes on every attribute and method:
+   - "+fieldName: Type"  → public
+   - "-fieldName: Type"  → private
+   - "#fieldName: Type"  → protected
+   - "~fieldName: Type"  → package-private
+2. Methods format: "+methodName(param: Type): ReturnType"
+3. Stereotypes: controller, service, entity, valueObject, repository, enum, interface, abstract, utility
+4. Abstract classes: set data.abstract = true AND stereotype = "abstract". Abstract method names are italicised in the UI.
+5. Interfaces: set stereotype = "interface" and data.abstract = true.
 
-Guidelines:
-1. Assign each class to the correct column based on its role
-2. Use UML visibility prefixes: "+fieldName: type" for public, "-fieldName: type" for private, "#fieldName: type" for protected
-3. Keep methods concise: "+methodName(): returnType" format, max 4
-4. Use appropriate relationships: inheritance, association, composition, aggregation, dependency
-5. Add stereotypes: controller, service, entity, valueObject, repository, enum, interface
-6. Ensure all node and edge IDs are unique and descriptive`;
+EDGE RULES — CRITICAL: you MUST use the correct "type" for every edge. Never default everything to "association".
+
+MANDATORY DECISION TABLE — pick the first matching rule:
+| Relationship                                      | type          | Example                          |
+|---------------------------------------------------|---------------|----------------------------------|
+| Class A extends/implements Class B                | "inheritance" | UserService extends BaseService  |
+| Class A owns Class B (B dies when A dies)         | "composition" | Order → OrderItem                |
+| Class A has a collection of Class B (weak own.)   | "aggregation" | Team → Player                    |
+| Class A uses/calls Class B but doesn't own it     | "dependency"  | Controller uses AuthService      |
+| Class A holds a reference to Class B              | "association" | User has an Address              |
+
+SELF-CHECK before outputting: scan every edge — if more than 60% are "association", you have made an error. Reclassify.
+
+MULTIPLICITY — required on every association, aggregation, and composition edge:
+- "1"    → exactly one
+- "0..1" → zero or one
+- "0..*" → zero or many  (most common for collections)
+- "1..*" → one or many
+Set both source and target: { "source": "1", "target": "0..*" }
+
+Ensure all node and edge IDs are unique and descriptive.`;
 
       case "sequence":
         return `You are an expert software architect specializing in UML Sequence diagrams.
 
 Your task is to generate sequence diagrams showing interactions between components.
 
-POSITION RULES: Set ALL node positions to { "x": 0, "y": 0 } — the renderer handles column layout automatically.
+POSITION RULES: Set ALL lifeline/actor node positions to { "x": 0, "y": 0 } — the renderer handles column layout automatically.
 
-Guidelines for Sequence Diagrams:
-1. Identify actors (users, external systems) and system components
-2. Use "actor" type for external entities (users, external systems)
-3. Use "lifeline" type for internal system components
-4. Create edges in CHRONOLOGICAL ORDER — the order of edges in the array determines the vertical sequence
-5. Label every edge with the message/method call being sent
-6. Keep the number of lifelines focused (5-8 max) — prefer fewer, well-named participants
-7. Ensure all node and edge IDs are unique and descriptive`;
+HARD LIMIT: Maximum 6 lifelines/actors total. If the requirements involve more components, merge related ones (e.g. "Auth + Session Service") rather than creating separate lifelines. A crowded diagram is worse than a simplified one.
+
+NODE TYPES:
+- "actor"    : External entities (users, external systems). Use for the initiating user/client only.
+- "lifeline" : Internal system components (services, controllers, databases). Max 5 lifelines.
+- "fragment" : Logic containers for conditional/loop blocks.
+  Fragment kinds (set as data.stereotype):
+  - "alt"  → If/Else block
+  - "opt"  → Optional execution (single If)
+  - "loop" → For/While loop
+  Set data.attributes[0] to the condition string, e.g. "user.isAuthenticated".
+
+  FRAGMENT POSITIONING — CRITICAL:
+  Fragments must visually cover the messages they contain. To position correctly:
+  1. Find the msgY of the FIRST message inside the fragment (e.g. msgY=220).
+  2. Find the msgY of the LAST message inside the fragment (e.g. msgY=440).
+  3. Set fragment position.y = firstMsgY - 20 (e.g. 200).
+  4. Set fragment height in data as data.height = (lastMsgY - firstMsgY) + 60 (e.g. 280).
+  5. Set fragment position.x = 60 (left edge of the first involved lifeline column).
+  6. Set fragment width wide enough to cover all involved lifelines (e.g. 560 for 2 lifelines).
+  Store height and width in data: { stereotype: "alt", attributes: ["condition"], height: 280, width: 560 }
+
+MESSAGE TYPES (edge.msgType — CRITICAL for code generation):
+- "sync"   → Synchronous call. Caller WAITS. Use for standard function/API calls.
+- "return" → Response to a sync call. Always pair with a preceding "sync" edge.
+- "async"  → Fire-and-forget. Caller does NOT wait (queue, event, background job).
+
+EDGE ORDERING — THE MOST IMPORTANT RULE:
+The array index of each edge IS its execution order. Edge[0] runs first.
+Always emit edges in strict chronological order.
+
+Typical request-response pattern (edges array):
+  0. Actor → Controller  (sync,   "POST /login")
+  1. Controller → Service (sync,   "authenticate(credentials)")
+  2. Service → Database   (sync,   "findUser(email)")
+  3. Database → Service   (return, "User | null")
+  4. Service → Controller (return, "AuthToken")
+  5. Controller → Actor   (return, "200 { token }")
+
+Guidelines:
+1. HARD LIMIT: 1 actor + max 5 lifelines = 6 participants total. Merge if needed.
+2. Emit edges in CHRONOLOGICAL ORDER.
+3. Label every edge with the method call or message.
+4. Use msgType "return" for all response messages.
+5. Use msgType "async" for queue publishes, event emissions, background jobs.
+6. Add fragment nodes for conditional or looping logic, positioned to cover their messages.
+7. All node and edge IDs must be unique and descriptive.`;
 
       case "erd":
       case "erd":
@@ -408,8 +515,13 @@ NODE FORMAT:
 EDGE FORMAT:
 - source/target: table node IDs
 - type: "association" for all FK relationships
-- label: "sourceColumn -> targetColumn" (e.g. "id -> user_id")
-- multiplicity: { source: "1", target: "0..*" } for hasMany, { source: "1", target: "0..1" } for hasOne
+- multiplicity: REQUIRED on every edge — use crow's foot notation values:
+  - { source: "1", target: "0..*" } → one-to-many (most FK relationships)
+  - { source: "1", target: "1" }   → one-to-one
+  - { source: "1", target: "1..*" } → one-to-many mandatory
+  - { source: "0..1", target: "0..*" } → optional one-to-many
+  The UI renders these as crow's foot symbols — do NOT use text labels, use multiplicity only.
+- Do NOT set label on ERD edges (the crow's foot markers replace text labels)
 
 POSITION RULES — same LR grid as class diagrams:
 - Central tables (most FK references) at x=580, y=320
@@ -430,29 +542,34 @@ Guidelines:
 Your task is to generate clear, readable flowcharts from requirements.
 
 NODE TYPES — use exactly these string values:
-- "terminal"  : Start/End oval (rounded pill shape) — use for "Start" and "End" nodes
-- "process"   : Regular step rectangle (rounded corners) — use for actions/steps
-- "decision"  : Diamond shape — use for yes/no or conditional branches
+- "terminal"  : Start/End oval — use for "Start" and "End" nodes only
+- "process"   : Rectangle — use for actions/steps
+- "decision"  : Diamond — use for yes/no branches
 - "io"        : Parallelogram — use for input/output operations
 
-POSITION RULES — top-to-bottom flow:
-- Start at y=60, increment y by 120 for each step
-- Center nodes at x=400 for the main flow
-- Branch left (x=160) for "No" paths, branch right (x=640) for "Yes" paths
-- Merge branches back to center when they rejoin
+POSITION RULES — strict top-to-bottom, center-aligned:
+- ALL nodes on the main flow share the SAME x coordinate: x=320
+- Start at y=60, increment y by 140 for each step on the main flow
+- "No" branch nodes go to x=560 (right side), keeping the same y as the diamond
+- "Yes" branch continues downward at x=320
+- Merge nodes return to x=320
+- CRITICAL: Every node on the main vertical flow MUST have x=320 exactly. No slight offsets.
 
 EDGE RULES:
 - type: "association" for all edges
-- For decision nodes: label outgoing edges "Yes" or "No"
-- sourceHandle: "yes" for the Yes branch (bottom), "no" for the No branch (right)
+- Edges use smoothstep (right-angled) routing — no curves
+- For decision diamonds, use sourceHandle to bind exits:
+  - "Yes" path: sourceHandle = "yes"  (exits from the BOTTOM of the diamond)
+  - "No" path:  sourceHandle = "no"   (exits from the RIGHT of the diamond)
+- Label "Yes" edges with label: "Yes" and "No" edges with label: "No"
 - Keep labels short (1-3 words max)
 
 Guidelines:
-1. Always start with a "terminal" node labeled "Start"
-2. Always end with a "terminal" node labeled "End"  
+1. Always start with a "terminal" node labeled "Start" at x=320, y=60
+2. Always end with a "terminal" node labeled "End"
 3. Use "decision" nodes for any conditional logic
 4. Keep the flow readable — max 12 nodes
-5. Ensure all node and edge IDs are unique`;
+5. All node IDs must be unique`;
 
       case "deployment":
         return `You are an expert software architect specializing in UML Deployment Diagrams.
@@ -525,7 +642,12 @@ Inside an executionEnvironment, nested items stack at:
   First item:  x=12, y=44
   Second item: x=12, y=104
 
-Container ("node") size must accommodate children — use minWidth=280, and height = 60 + (number_of_children * 100)
+Container ("node") size must accommodate children — use minWidth=280, and height = 60 + (number_of_children * 110)
+
+LABEL LENGTH: Keep all labels SHORT (max 4 words). Long labels cause overlap. Use abbreviations:
+- "React Frontend" not "Frontend Web Application (React + TypeScript)"
+- "Auth Service" not "Authentication and Authorization Service"
+- "app.jar" not "application-deployment-artifact.jar"
 
 EDGES:
 - Only between top-level "node" containers
@@ -541,42 +663,56 @@ Ensure all IDs are unique snake_case strings.`;
 
 Your task is to generate well-structured component diagrams that show how the system is wired together.
 
-NODE DIMENSIONS:
-- Every component node is 240px wide.
+NODE DIMENSIONS: Every component node is 240px wide.
 
 STRICT POSITION RULES — LEFT TO RIGHT LAYOUT:
-Arrange nodes in columns from left to right based on dependencies (requirer -> provider).
-- Column 0 (x=60): Client applications, entry points
-- Column 1 (x=360): API Gateways, edge components
-- Column 2 (x=660): Core services, business logic components
-- Column 3 (x=960): Data access components, integration adapters
+Arrange nodes in columns from left to right based on dependencies (requirer → provider).
+- Column 0 (x=60):   Client applications, entry points
+- Column 1 (x=360):  API Gateways, edge components
+- Column 2 (x=660):  Core services, business logic
+- Column 3 (x=960):  Data access, integration adapters
 - Column 4 (x=1260): External systems, databases
 
 Within each column, stack nodes vertically with 300px between them: y=60, 360, 660, 960...
-No two nodes may share the same (x, y) position. Generate at most 8-10 nodes.
+No two nodes may share the same (x, y) position. Generate at most 8-10 component nodes.
 
-UML COMPONENT RULES:
-1. Component: Main physical/logical modules. Use "component" type.
-2. Provided Interfaces: Services the component OFFERS to others. Add these to the "attributes" array.
-3. Required Interfaces: Services the component NEEDS from others. Add these to the "methods" array.
-4. Standalone Interfaces: You may use "interface" type for shared interfaces, but generally attach them to components.
+NODE TYPES:
+- "component" : Main logical module. Rendered as a UML component box with provided/required interface sections.
+  - data.attributes → PROVIDED interfaces (lollipop ○). Services this component OFFERS.
+  - data.methods    → REQUIRED interfaces (socket ◑). Services this component NEEDS.
+- "boundary"  : System boundary / group box. A resizable dashed-border container that visually groups related components.
+  - Use to group components by domain (e.g. "Frontend", "Backend", "AI Workers", "Supabase").
+  - Set data.label to the boundary name.
+  - Set data.color to a hex color (e.g. "#6366f1" for indigo, "#10b981" for green, "#f59e0b" for amber).
+  - Position: place at the top-left of the group it contains, large enough to cover all members.
+  - Boundary nodes do NOT need edges; they are visual overlays only (zIndex: -1).
 
-Example Node properties:
+EDGE RULES:
+- type: "dependency" for all component-to-component connections.
+- Edges use smoothstep (right-angled) routing — no curved bezier lines.
+- When connecting to a specific interface, set sourceHandle and targetHandle:
+  - sourceHandle: "provided-<InterfaceName>" (e.g. "provided-IProcessPayment")
+  - targetHandle: "required-<InterfaceName>" (e.g. "required-IBankGateway")
+  This wires the edge to the exact interface row on the node, not just the node border.
+- label: the interface name being connected (e.g. "IProcessPayment").
+
+EXAMPLE:
 {
-  "id": "payment_service",
-  "type": "component",
-  "position": { "x": 660, "y": 60 },
-  "data": {
-    "label": "Payment Processing",
-    "attributes": ["IProcessPayment", "IRefund"], // Provided (lollipop)
-    "methods": ["IBankGateway", "IAuditLog"]      // Required (socket)
-  }
+  "id": "edge_payment",
+  "source": "checkout_service",
+  "target": "payment_service",
+  "type": "dependency",
+  "label": "IProcessPayment",
+  "sourceHandle": "required-IProcessPayment",
+  "targetHandle": "provided-IProcessPayment"
 }
 
 Guidelines:
 1. Focus on high-level modular architecture, not class-level details.
-2. Edges generally represent assembly connectors (wiring a required interface to a provided interface).
-3. Use "dependency" for edges.`;
+2. Every component should have at least one provided OR required interface.
+3. Wire required interfaces to the matching provided interfaces of other components.
+4. Add boundary nodes to group components by architectural layer or domain.
+5. All node and edge IDs must be unique and descriptive.`;
 
       default:
         return "You are an expert software architect.";

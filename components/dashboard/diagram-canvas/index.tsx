@@ -16,6 +16,7 @@ import {
   type NodeChange,
   Panel,
   ReactFlow,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -23,11 +24,13 @@ import type { DiagramEdge, DiagramNode, NodeType } from "@/lib/types/diagram";
 
 import { ColumnEditorDialog, ContextMenu, EditLabelDialog, type CtxTarget } from "./shared";
 import { ClassNode } from "./nodes-class";
-import { LifelineNode, SequenceEdge, SEQ_MSG_START_Y, SEQ_MSG_SPACING } from "./nodes-sequence";
+import { LifelineNode, SequenceEdge, FragmentNode, SEQ_MSG_START_Y, SEQ_MSG_SPACING, computeActivations } from "./nodes-sequence";
 import { ArtifactNode, ComponentNode, DeploymentNode, ExecEnvNode, InterfaceNode } from "./nodes-deployment";
-import { ComponentDiagramNode, ProvidedInterfaceNode, RequiredInterfaceNode } from "./nodes-component";
+import { ComponentDiagramNode, ProvidedInterfaceNode, RequiredInterfaceNode, BoundaryNode } from "./nodes-component";
 import { ErdTableNode } from "./nodes-erd";
+import { ErdEdge, ErdMarkerDefs } from "./edges-erd";
 import { FlowDecision, FlowIO, FlowProcess, FlowTerminal } from "./nodes-flowchart";
+import { UmlClassEdge, UmlMarkerDefs } from "./edges-class";
 import { toFlowEdges, toFlowNodes } from "./converters";
 import { useAutoResizeContainers } from "./use-auto-resize-containers";
 
@@ -61,6 +64,9 @@ function flowNodesToDiagramNodes(flowNodes: Node[], diagramNodes: DiagramNode[])
         position: fn.position,
         data: {
           ...orig.data,
+          // Preserve inline-edited attributes/methods from the flow node
+          ...(fn.data.attributes !== undefined && fn.data.attributes !== null ? { attributes: fn.data.attributes as string[] } : {}),
+          ...(fn.data.methods !== undefined && fn.data.methods !== null ? { methods: fn.data.methods as string[] } : {}),
           ...(children ? { children } : {}),
         },
       };
@@ -81,6 +87,7 @@ function flowNodesToDiagramNodes(flowNodes: Node[], diagramNodes: DiagramNode[])
 const nodeTypes = {
   lifeline: LifelineNode,
   actor: LifelineNode,
+  fragment: FragmentNode,
   class: ClassNode,
   entity: ErdTableNode,
   // deployment
@@ -93,13 +100,78 @@ const nodeTypes = {
   componentDiagram: ComponentDiagramNode,
   providedInterface: ProvidedInterfaceNode,
   requiredInterface: RequiredInterfaceNode,
+  boundary: BoundaryNode,
   // flowchart
   process: FlowProcess,
   decision: FlowDecision,
   terminal: FlowTerminal,
   io: FlowIO,
 };
-const edgeTypes = { sequence: SequenceEdge };
+const edgeTypes = { sequence: SequenceEdge, umlClass: UmlClassEdge, erdEdge: ErdEdge };
+
+// ─── Flow edge → DiagramEdge ──────────────────────────────────────────────────
+function flowEdgeToDiagram(fe: Edge, orig: DiagramEdge | undefined): DiagramEdge {
+  if (orig) {
+    const d = fe.data as Record<string, unknown> | undefined;
+    return {
+      ...orig,
+      label: (fe.label as string | undefined) ?? orig.label,
+      // sequence
+      ...(d?.msgType !== undefined ? { msgType: d.msgType as DiagramEdge["msgType"] } : {}),
+      ...(d?.msgY !== undefined ? { msgY: d.msgY as number } : {}),
+      // uml class
+      ...(d?.relType !== undefined ? { type: d.relType as DiagramEdge["type"] } : {}),
+      ...(d?.sourceMultiplicity !== undefined || d?.targetMultiplicity !== undefined
+        ? { multiplicity: { source: d?.sourceMultiplicity as string, target: d?.targetMultiplicity as string } }
+        : {}),
+      // erd crow's foot
+      ...(d?.sourceMult !== undefined || d?.targetMult !== undefined
+        ? { multiplicity: { source: d?.sourceMult as string, target: d?.targetMult as string } }
+        : {}),
+      ...(fe.sourceHandle !== undefined && fe.sourceHandle !== null ? { sourceHandle: fe.sourceHandle as string } : {}),
+      ...(fe.targetHandle !== undefined && fe.targetHandle !== null ? { targetHandle: fe.targetHandle as string } : {}),
+    };
+  }
+  return { 
+    id: fe.id, 
+    source: fe.source, 
+    target: fe.target, 
+    type: "association", 
+    ...(fe.sourceHandle ? { sourceHandle: fe.sourceHandle as string } : {}), 
+    ...(fe.targetHandle ? { targetHandle: fe.targetHandle as string } : {}) 
+  };
+}
+
+// ─── Callback injection helpers ──────────────────────────────────────────────────
+// Inject onUpdate (visibility cycling) and onEditMembers (open dialog) into class nodes.
+function injectClassCallbacks(
+  nodes: Node[],
+  onUpdate: (id: string, patch: Record<string, unknown>) => void,
+  onEditMembers: (id: string, label: string, field: "attributes" | "methods") => void,
+  onEdgeDataChange: (id: string, patch: Record<string, unknown>) => void,
+): Node[] {
+  return nodes.map((n) => {
+    if (n.type !== "class") return n;
+    return {
+      ...n,
+      data: {
+        ...n.data,
+        onUpdate: (patch: Record<string, unknown>) => onUpdate(n.id, patch),
+        onEditMembers: (field: "attributes" | "methods") => onEditMembers(n.id, String(n.data.label ?? ""), field),
+      },
+    };
+  });
+}
+
+function injectEdgeCallbacks(
+  edges: Edge[],
+  onDataChange: (id: string, patch: Record<string, unknown>) => void,
+): Edge[] {
+  return edges.map((e) => {
+    if (e.type !== "umlClass" && e.type !== "erdEdge") return e;
+    return { ...e, data: { ...e.data, onDataChange: (patch: Record<string, unknown>) => onDataChange(e.id, patch) } };
+  });
+}
 
 const NODE_PALETTE: Record<string, Array<{ type: string; label: string; defaultLabel: string; color: string }>> = {
   class: [
@@ -110,14 +182,16 @@ const NODE_PALETTE: Record<string, Array<{ type: string; label: string; defaultL
     { type: "entity", label: "Table",      defaultLabel: "new_table",     color: "#7c3aed" },
   ],
   sequence: [
-    { type: "lifeline", label: "Lifeline", defaultLabel: "Component",     color: "#374151" },
-    { type: "actor",    label: "Actor",    defaultLabel: "Actor",         color: "#374151" },
+    { type: "lifeline",  label: "Lifeline",  defaultLabel: "Component", color: "#374151" },
+    { type: "actor",     label: "Actor",     defaultLabel: "Actor",     color: "#374151" },
+    { type: "fragment",  label: "Fragment",  defaultLabel: "alt",       color: "#6366f1" },
   ],
   deployment: [
     { type: "node", label: "Node", defaultLabel: "Server", color: "#1e40af" },
   ],
   component: [
     { type: "component",  label: "Component", defaultLabel: "Component", color: "#6366f1" },
+    { type: "boundary",   label: "Boundary",  defaultLabel: "System",    color: "#64748b" },
   ],
   flowchart: [
     { type: "terminal",  label: "Start/End", defaultLabel: "Start",       color: "#16a34a" },
@@ -157,9 +231,13 @@ export function DiagramCanvas({
   const isFlow = diagramType === "flowchart";
   const isComp = diagramType === "component";
 
-  const [flowNodes, setFlowNodes] = useState<Node[]>(() => toFlowNodes(diagramNodes, isSeq, isDeploy, isComp));
-  const [flowEdges, setFlowEdges] = useState<Edge[]>(() => toFlowEdges(diagramEdges, isSeq, isErd, isFlow));
+  // Stable callback refs so we can inject them into node/edge data without stale closures
+  const classNodeUpdateRef = useRef<(id: string, patch: Record<string, unknown>) => void>(() => {});
+  const editClassMembersRef = useRef<(id: string, label: string, field: "attributes" | "methods") => void>(() => {});
+  const umlEdgeDataChangeRef = useRef<(id: string, patch: Record<string, unknown>) => void>(() => {});
 
+  const [flowNodes, setFlowNodes] = useState<Node[]>(() => toFlowNodes(diagramNodes, isSeq, isDeploy, isComp, diagramEdges));
+  const [flowEdges, setFlowEdges] = useState<Edge[]>(() => toFlowEdges(diagramEdges, isSeq, isErd, isFlow, isComp));
   // Keep a mutable ref to the latest flowNodes so callbacks never read stale state
   const flowNodesRef = useRef(flowNodes);
   useEffect(() => { flowNodesRef.current = flowNodes; }, [flowNodes]);
@@ -171,6 +249,50 @@ export function DiagramCanvas({
   const [interfaceEdit, setInterfaceEdit] = useState<{ id: string; label: string; field: "provided" | "required"; values: string[] } | null>(null);
   const [classMemberEdit, setClassMemberEdit] = useState<{ id: string; label: string; field: "attributes" | "methods"; values: string[] } | null>(null);
   const [pendingConnectSource, setPendingConnectSource] = useState<string | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [erdSearch, setErdSearch] = useState("");
+  const rfInstanceRef = useRef<ReactFlowInstance | null>(null);
+
+  // ─── Inline class node editing (visibility cycling) ─────────────────────────
+  const handleClassNodeUpdate = useCallback((nodeId: string, patch: Record<string, unknown>) => {
+    const updated = flowNodesRef.current.map((n) =>
+      n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n
+    );
+    const withCbs = injectClassCallbacks(updated, classNodeUpdateRef.current, editClassMembersRef.current, umlEdgeDataChangeRef.current);
+    flowNodesRef.current = withCbs;
+    setFlowNodes(withCbs);
+    if (onNodesChange) onNodesChange(flowNodesToDiagramNodes(withCbs, diagramNodes));
+  }, [diagramNodes, onNodesChange]);
+
+  // ─── Inline UML edge data change (type, multiplicity) ────────────────────────
+  const handleUmlEdgeDataChange = useCallback((edgeId: string, patch: Record<string, unknown>) => {
+    const updated = flowEdgesRef.current.map((e) =>
+      e.id === edgeId ? { ...e, data: { ...e.data, ...patch } } : e
+    );
+    const withCbs = injectEdgeCallbacks(updated, umlEdgeDataChangeRef.current);
+    flowEdgesRef.current = withCbs;
+    setFlowEdges(withCbs);
+    if (onEdgesChange) {
+      onEdgesChange(updated.map((fe) => {
+        const orig = diagramEdges.find((e) => e.id === fe.id);
+        const d = fe.data as Record<string, unknown> | undefined;
+        return orig
+          ? { ...orig, type: (d?.relType as DiagramEdge["type"]) ?? orig.type, multiplicity: { source: d?.sourceMultiplicity as string, target: d?.targetMultiplicity as string } }
+          : { id: fe.id, source: fe.source, target: fe.target, type: "association" as const };      }));
+    }
+  }, [diagramEdges, onEdgesChange]);
+
+  // Keep refs in sync with latest callbacks, and re-inject into nodes/edges when they change
+  useEffect(() => {
+    classNodeUpdateRef.current = handleClassNodeUpdate;
+  }, [handleClassNodeUpdate]);
+
+  useEffect(() => {
+    umlEdgeDataChangeRef.current = handleUmlEdgeDataChange;
+    setFlowEdges((prev) => injectEdgeCallbacks(prev, handleUmlEdgeDataChange));
+  }, [handleUmlEdgeDataChange]);
+
 
   // Highlight a node when navigating from requirements table
   useEffect(() => {
@@ -225,8 +347,10 @@ export function DiagramCanvas({
       const erd = diagramTypeRef.current === "erd";
       const flow = diagramTypeRef.current === "flowchart";
       const comp = diagramTypeRef.current === "component";
-      setFlowNodes(toFlowNodes(diagramNodes, seq, deploy, comp));
-      setFlowEdges(toFlowEdges(diagramEdges, seq, erd, flow));
+      const newNodes = toFlowNodes(diagramNodes, seq, deploy, comp, diagramEdges);
+      const newEdges = toFlowEdges(diagramEdges, seq, erd, flow, comp);
+      setFlowNodes(injectClassCallbacks(newNodes, classNodeUpdateRef.current, editClassMembersRef.current, umlEdgeDataChangeRef.current));
+      setFlowEdges(injectEdgeCallbacks(newEdges, umlEdgeDataChangeRef.current));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diagramNodes, diagramEdges]);
@@ -235,25 +359,60 @@ export function DiagramCanvas({
   useAutoResizeContainers(flowNodes, setFlowNodes);
 
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
-    const updated = applyNodeChanges(changes, flowNodesRef.current);
-    flowNodesRef.current = updated;
-    setFlowNodes(updated);
+    // Lock lifeline nodes to horizontal movement only (Y-axis fixed at 40)
+    const lockedChanges = isSeq ? changes.map((c) => {
+      if (c.type === "position" && c.position) {
+        const node = flowNodesRef.current.find((n) => n.id === c.id);
+        if (node?.type === "lifeline") {
+          return { ...c, position: { x: c.position.x, y: 40 } };
+        }
+      }
+      return c;
+    }) : changes;
+    const updated = applyNodeChanges(lockedChanges, flowNodesRef.current);
+    // Re-inject callbacks after every change since applyNodeChanges may strip functions from data
+    const withCbs = injectClassCallbacks(updated, classNodeUpdateRef.current, editClassMembersRef.current, umlEdgeDataChangeRef.current);
+    flowNodesRef.current = withCbs;
+    setFlowNodes(withCbs);
     if (onNodesChange) {
-      onNodesChange(flowNodesToDiagramNodes(updated, diagramNodes));
+      onNodesChange(flowNodesToDiagramNodes(withCbs, diagramNodes));
     }
   }, [diagramNodes, onNodesChange]);
 
   const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
     const updated = applyEdgeChanges(changes, flowEdgesRef.current);
-    flowEdgesRef.current = updated;
-    setFlowEdges(updated);
-    if (onEdgesChange) {
-      onEdgesChange(updated.map((fe) => {
-        const orig = diagramEdges.find((e) => e.id === fe.id);
-        return orig ?? { id: fe.id, source: fe.source, target: fe.target, type: "association" };
-      }));
+    const withCbs = injectEdgeCallbacks(updated, umlEdgeDataChangeRef.current);
+    flowEdgesRef.current = withCbs;
+    setFlowEdges(withCbs);
+
+    // For sequence diagrams, recompute activation boxes on lifeline nodes
+    if (isSeq) {
+      const seqEdges = withCbs.filter((e) => e.type === "sequence");
+      const activationMap = computeActivations(seqEdges);
+      setFlowNodes((prev) => {
+        const patched = prev.map((n) => {
+          if (n.type !== "lifeline") return n;
+          return { ...n, data: { ...n.data, activations: activationMap.get(n.id) ?? [] } };
+        });
+        flowNodesRef.current = patched;
+        return patched;
+      });
     }
-  }, [diagramEdges, onEdgesChange]);
+
+    if (onEdgesChange) {
+      // Convert to DiagramEdges and sort by msgY for sequence diagrams
+      let diagramResult = withCbs.map((fe) => {
+        const orig = diagramEdges.find((e) => e.id === fe.id);
+        return flowEdgeToDiagram(fe, orig);
+      });
+      if (isSeq) {
+        diagramResult = diagramResult
+          .sort((a, b) => (a.msgY ?? 0) - (b.msgY ?? 0))
+          .map((e, i) => ({ ...e, order: i + 1 }));
+      }
+      onEdgesChange(diagramResult);
+    }
+  }, [isSeq, diagramEdges, onEdgesChange]);
 
   const handleConnect = useCallback((connection: Connection) => {
     const edgeDefaults: Partial<Edge> = isFlow
@@ -263,28 +422,65 @@ export function DiagramCanvas({
           markerEnd: { type: MarkerType.ArrowClosed, color: "#6366f1", width: 14, height: 14 },
         }
       : isComp
-      ? {
-          type: "smoothstep",
-          style: { stroke: "#6366f1", strokeWidth: 1.5, strokeDasharray: "5 3" },
-          markerEnd: { type: MarkerType.ArrowClosed, color: "#6366f1", width: 14, height: 14 },
-        }
+      ? (() => {
+          // Smart inference for label
+          let edgeLabel = "«interface»";
+          if (connection.sourceHandle && connection.sourceHandle.startsWith("provided-")) {
+            edgeLabel = `«${connection.sourceHandle.replace("provided-", "")}»`;
+          } else if (connection.targetHandle && connection.targetHandle.startsWith("required-")) {
+            edgeLabel = `«${connection.targetHandle.replace("required-", "")}»`;
+          }
+
+          return {
+            type: "smoothstep",
+            label: edgeLabel,
+            style: { stroke: "#6366f1", strokeWidth: 1.5 },
+            markerEnd: { type: MarkerType.ArrowClosed, color: "#6366f1", width: 14, height: 14 },
+            labelStyle: { fill: "#6366f1", fontWeight: 600, fontSize: 10, fontFamily: "'JetBrains Mono', monospace" },
+            labelBgStyle: { fill: "white", fillOpacity: 0.9 },
+          };
+        })()
       : !isSeq && !isDeploy && !isErd
       ? {
-          type: "smoothstep",
-          style: { stroke: "#374151", strokeWidth: 1.5 },
-          markerEnd: { type: MarkerType.Arrow, color: "#374151" },
+          type: "umlClass",
+          data: { relType: "association", sourceMultiplicity: "", targetMultiplicity: "" },
+        }
+      : isErd
+      ? {
+          type: "erdEdge",
+          data: { sourceMult: "1", targetMult: "0..*" },
         }
       : {};
     const updated = addEdge({ ...connection, ...edgeDefaults }, flowEdgesRef.current);
-    flowEdgesRef.current = updated;
-    setFlowEdges(updated);
-    if (onEdgesChange) {
-      onEdgesChange(updated.map((fe) => {
-        const orig = diagramEdges.find((e) => e.id === fe.id);
-        return orig ?? { id: fe.id, source: fe.source, target: fe.target, type: "association" };
-      }));
+    const withCbs = injectEdgeCallbacks(updated, umlEdgeDataChangeRef.current);
+    flowEdgesRef.current = withCbs;
+    setFlowEdges(withCbs);
+    // Recompute activations for sequence diagrams
+    if (isSeq) {
+      const seqEdges = withCbs.filter((e) => e.type === "sequence");
+      const activationMap = computeActivations(seqEdges);
+      setFlowNodes((prev) => {
+        const patched = prev.map((n) => {
+          if (n.type !== "lifeline") return n;
+          return { ...n, data: { ...n.data, activations: activationMap.get(n.id) ?? [] } };
+        });
+        flowNodesRef.current = patched;
+        return patched;
+      });
     }
-  }, [isFlow, diagramEdges, onEdgesChange]);
+    if (onEdgesChange) {
+      let diagramResult = withCbs.map((fe) => {
+        const orig = diagramEdges.find((e) => e.id === fe.id);
+        return flowEdgeToDiagram(fe, orig);
+      });
+      if (isSeq) {
+        diagramResult = diagramResult
+          .sort((a, b) => (a.msgY ?? 0) - (b.msgY ?? 0))
+          .map((e, i) => ({ ...e, order: i + 1 }));
+      }
+      onEdgesChange(diagramResult);
+    }
+  }, [isFlow, isSeq, diagramEdges, onEdgesChange]);
 
   const handleNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
     if (readOnly) return;
@@ -310,26 +506,51 @@ export function DiagramCanvas({
           target: node.id,
           type: "sequence",
           label: "",
-          data: { msgY: SEQ_MSG_START_Y + existingSeqEdges.length * SEQ_MSG_SPACING },
+          data: { msgY: SEQ_MSG_START_Y + existingSeqEdges.length * SEQ_MSG_SPACING, msgType: "sync" },
         }
       : {
           id: `edge_${Date.now()}`,
           source: pendingConnectSource,
           target: node.id,
-          type: "straight",
-          markerEnd: { type: MarkerType.ArrowClosed },
+          type: "umlClass",
+          data: {
+            relType: "association",
+            sourceMultiplicity: "",
+            targetMultiplicity: "",
+            onDataChange: (patch: Record<string, unknown>) => umlEdgeDataChangeRef.current(`edge_${Date.now()}`, patch),
+          },
         };
     const updated = [...flowEdgesRef.current, newEdge];
-    flowEdgesRef.current = updated;
-    setFlowEdges(updated);
+    const withCbs = injectEdgeCallbacks(updated, umlEdgeDataChangeRef.current);
+    flowEdgesRef.current = withCbs;
+    setFlowEdges(withCbs);
     setPendingConnectSource(null);
-    if (onEdgesChange) {
-      onEdgesChange(updated.map((fe) => {
-        const orig = diagramEdges.find((e) => e.id === fe.id);
-        return orig ?? { id: fe.id, source: fe.source, target: fe.target, type: "association" };
-      }));
+    // Recompute activations for sequence diagrams
+    if (isSeq) {
+      const seqEdges = withCbs.filter((e) => e.type === "sequence");
+      const activationMap = computeActivations(seqEdges);
+      setFlowNodes((prev) => {
+        const patched = prev.map((n) => {
+          if (n.type !== "lifeline") return n;
+          return { ...n, data: { ...n.data, activations: activationMap.get(n.id) ?? [] } };
+        });
+        flowNodesRef.current = patched;
+        return patched;
+      });
     }
-  }, [pendingConnectSource, diagramEdges, onEdgesChange]);
+    if (onEdgesChange) {
+      let diagramResult = updated.map((fe) => {
+        const orig = diagramEdges.find((e) => e.id === fe.id);
+        return flowEdgeToDiagram(fe, orig);
+      });
+      if (isSeq) {
+        diagramResult = diagramResult
+          .sort((a, b) => (a.msgY ?? 0) - (b.msgY ?? 0))
+          .map((e, i) => ({ ...e, order: i + 1 }));
+      }
+      onEdgesChange(diagramResult);
+    }
+  }, [pendingConnectSource, isSeq, diagramEdges, onEdgesChange]);
   const handleEdgeContextMenu = useCallback((e: React.MouseEvent, edge: Edge) => {
     if (readOnly) return;
     e.preventDefault();
@@ -338,7 +559,19 @@ export function DiagramCanvas({
 
   const handleDelete = useCallback((kind: "node" | "edge", id: string) => {
     if (kind === "node") {
-      const updatedNodes = flowNodesRef.current.filter((n) => n.id !== id);
+      // Collect the node and all its descendants (children, grandchildren, etc.)
+      const toDelete = new Set<string>();
+      const queue = [id];
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        toDelete.add(current);
+        // Find all nodes whose parentId is current (ReactFlow children)
+        for (const n of flowNodesRef.current) {
+          if (n.parentId === current) queue.push(n.id);
+        }
+      }
+
+      const updatedNodes = flowNodesRef.current.filter((n) => !toDelete.has(n.id));
       flowNodesRef.current = updatedNodes;
       setFlowNodes(updatedNodes);
       skipNextSyncRef.current = true;
@@ -346,13 +579,14 @@ export function DiagramCanvas({
       if (onNodesChange) {
         onNodesChange(flowNodesToDiagramNodes(updatedNodes, diagramNodes));
       }
-      const updatedEdges = flowEdgesRef.current.filter((e) => e.source !== id && e.target !== id);
+      // Remove edges connected to any deleted node
+      const updatedEdges = flowEdgesRef.current.filter((e) => !toDelete.has(e.source) && !toDelete.has(e.target));
       flowEdgesRef.current = updatedEdges;
       setFlowEdges(updatedEdges);
       if (onEdgesChange) {
         onEdgesChange(updatedEdges.map((fe) => {
           const orig = diagramEdges.find((e) => e.id === fe.id);
-          return orig ?? { id: fe.id, source: fe.source, target: fe.target, type: "association" };
+          return flowEdgeToDiagram(fe, orig);
         }));
       }
     } else {
@@ -362,7 +596,7 @@ export function DiagramCanvas({
       if (onEdgesChange) {
         onEdgesChange(updatedEdges.map((fe) => {
           const orig = diagramEdges.find((e) => e.id === fe.id);
-          return orig ?? { id: fe.id, source: fe.source, target: fe.target, type: "association" };
+          return flowEdgeToDiagram(fe, orig);
         }));
       }
     }
@@ -416,14 +650,21 @@ export function DiagramCanvas({
     setClassMemberEdit({ id, label, field, values });
   }, []);
 
+  // Keep ref in sync and re-inject into class nodes so the hover buttons open the dialog
+  useEffect(() => {
+    editClassMembersRef.current = handleEditClassMembers;
+    setFlowNodes((prev) => injectClassCallbacks(prev, classNodeUpdateRef.current, handleEditClassMembers, umlEdgeDataChangeRef.current));
+  }, [handleEditClassMembers]);
+
   const handleSaveClassMembers = useCallback((newValues: string[]) => {
     if (!classMemberEdit) return;
     const updated = flowNodesRef.current.map((n) =>
       n.id === classMemberEdit.id ? { ...n, data: { ...n.data, [classMemberEdit.field]: newValues } } : n
     );
-    flowNodesRef.current = updated;
-    setFlowNodes(updated);
-    if (onNodesChange) onNodesChange(flowNodesToDiagramNodes(updated, diagramNodes));
+    const withCbs = injectClassCallbacks(updated, classNodeUpdateRef.current, editClassMembersRef.current, umlEdgeDataChangeRef.current);
+    flowNodesRef.current = withCbs;
+    setFlowNodes(withCbs);
+    if (onNodesChange) onNodesChange(flowNodesToDiagramNodes(withCbs, diagramNodes));
     setClassMemberEdit(null);
   }, [classMemberEdit, diagramNodes, onNodesChange]);
   const handleSaveLabel = useCallback((newLabel: string) => {
@@ -459,9 +700,9 @@ export function DiagramCanvas({
   // Parent expansion is handled entirely by useAutoResizeContainers.
   const handleAddDeployChild = useCallback((parentId: string, type: string, defaultLabel: string) => {
     const HEADER_H = 56;
-    const CHILD_H: Record<string, number> = { artifact: 56, component: 64, interface: 68, executionEnvironment: 100, node: 120 };
+    const CHILD_H: Record<string, number> = { artifact: 68, component: 80, interface: 68, executionEnvironment: 120, node: 140 };
     const CHILD_W = 260;
-    const CHILD_GAP = 12;
+    const CHILD_GAP = 16;
     const CHILD_PAD = 16;
 
     const childH = CHILD_H[type] ?? 52;
@@ -503,8 +744,8 @@ export function DiagramCanvas({
     const blocked = isDeploy ? CHILD_ONLY_TYPES : new Set([...CHILD_ONLY_TYPES].filter((t) => t !== "component"));
     if (blocked.has(type)) return;
 
-    const rfType = type === "node" ? "deploymentNode" : type === "component" && isComp ? "componentDiagram" : type;
-    const isContainer = type === "node";
+    const rfType = type === "node" ? "deploymentNode" : type === "component" && isComp ? "componentDiagram" : type === "boundary" ? "boundary" : type;
+    const isContainer = type === "node" || type === "boundary";
     const prev = flowNodesRef.current;
     const offset = prev.length * 20;
 
@@ -514,32 +755,63 @@ export function DiagramCanvas({
       position: { x: 200 + offset, y: 200 + offset },
       data: { label: defaultLabel },
       draggable: true,
-      style: isContainer ? { width: 280, height: 160 } : undefined,
+      style: isContainer ? { width: type === "boundary" ? 400 : 280, height: type === "boundary" ? 300 : 160 } : undefined,
+      zIndex: type === "boundary" ? -1 : undefined,
     };
 
     const updated = [...prev, newNode];
-    flowNodesRef.current = updated;
-    setFlowNodes(updated);
+    const withCbs = injectClassCallbacks(updated, classNodeUpdateRef.current, editClassMembersRef.current, umlEdgeDataChangeRef.current);
+    flowNodesRef.current = withCbs;
+    setFlowNodes(withCbs);
     skipNextSyncRef.current = true;
-    nodeIdSetRef.current = new Set(updated.map((n) => n.id));
+    nodeIdSetRef.current = new Set(withCbs.map((n) => n.id));
     if (onNodesChange) {
-      onNodesChange(flowNodesToDiagramNodes(updated, diagramNodes));
+      onNodesChange(flowNodesToDiagramNodes(withCbs, diagramNodes));
     }
   }, [diagramNodes, onNodesChange]);
 
+  // ─── Edge/node hover highlighting ────────────────────────────────────────────
+  const highlightedEdgeIds = new Set<string>();
+  if (hoveredEdgeId) highlightedEdgeIds.add(hoveredEdgeId);
+  if (hoveredNodeId) {
+    for (const e of flowEdges) {
+      if (e.source === hoveredNodeId || e.target === hoveredNodeId) highlightedEdgeIds.add(e.id);
+    }
+  }
+  const hasHighlight = highlightedEdgeIds.size > 0;
+  const displayEdges = hasHighlight
+    ? flowEdges.map((e) => {
+        const isHot = highlightedEdgeIds.has(e.id);
+        return {
+          ...e,
+          style: isHot
+            ? { ...(e.style ?? {}), stroke: "#2563eb", strokeWidth: 3, opacity: 1 }
+            : { ...(e.style ?? {}), opacity: 0.15 },
+          zIndex: isHot ? 10 : 0,
+        };
+      })
+    : flowEdges;
+
   return (
-    <div style={{ width: "100%", height: "100%" }}>
+    <div style={{ width: "100%", height: "100%", position: "relative" }}>
+      <UmlMarkerDefs />
+      <ErdMarkerDefs />
       <ReactFlow
         nodes={flowNodes}
-        edges={flowEdges}
+        edges={displayEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
+        onInit={(instance) => { rfInstanceRef.current = instance; }}
         onNodesChange={readOnly ? undefined : handleNodesChange}
         onEdgesChange={readOnly ? undefined : handleEdgesChange}
         onConnect={readOnly ? undefined : handleConnect}
         onNodeClick={pendingConnectSource ? handleNodeClick : (onNodeClick ? (_e, node) => onNodeClick(node.id) : undefined)}
         onNodeContextMenu={handleNodeContextMenu}
         onEdgeContextMenu={handleEdgeContextMenu}
+        onEdgeMouseEnter={(_e, edge) => setHoveredEdgeId(edge.id)}
+        onEdgeMouseLeave={() => setHoveredEdgeId(null)}
+        onNodeMouseEnter={(_e, node) => setHoveredNodeId(node.id)}
+        onNodeMouseLeave={() => setHoveredNodeId(null)}
         nodesDraggable={!readOnly && !pendingConnectSource}
         nodesConnectable={!readOnly}
         elementsSelectable={!readOnly}
@@ -547,10 +819,79 @@ export function DiagramCanvas({
         style={pendingConnectSource ? { cursor: "crosshair" } : undefined}
         fitView
         fitViewOptions={{ padding: 0.15 }}
+        snapToGrid={isFlow}
+        snapGrid={[20, 20]}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
         <Controls />
         {!isSeq && <MiniMap nodeColor="#1e40af" />}
+
+        {/* ERD search bar */}
+        {isErd && (
+          <Panel position="top-right" style={{ zIndex: 10 }}>
+            <div style={{
+              background: "#fff",
+              border: "1px solid #e2e8f0",
+              borderRadius: 8,
+              padding: "6px 10px",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontFamily: "system-ui, sans-serif",
+            }}>
+              <span style={{ fontSize: 13, color: "#94a3b8" }}>🔍</span>
+              <input
+                value={erdSearch}
+                onChange={(e) => {
+                  const q = e.target.value;
+                  setErdSearch(q);
+                  if (!q.trim()) return;
+                  const match = flowNodesRef.current.find((n) =>
+                    String(n.data.label ?? "").toLowerCase().includes(q.toLowerCase())
+                  );
+                  if (match && rfInstanceRef.current) {
+                    const w = (match.measured?.width ?? 240);
+                    const h = (match.measured?.height ?? 200);
+                    rfInstanceRef.current.fitBounds(
+                      { x: match.position.x, y: match.position.y, width: w, height: h },
+                      { padding: 0.4, duration: 400 }
+                    );
+                    // Flash highlight
+                    setFlowNodes((prev) => prev.map((n) => ({
+                      ...n,
+                      style: n.id === match.id
+                        ? { ...n.style, outline: "3px solid #6366f1", outlineOffset: "2px", borderRadius: "6px" }
+                        : n.style,
+                    })));
+                    setTimeout(() => {
+                      setFlowNodes((prev) => prev.map((n) => {
+                        if (n.id !== match.id) return n;
+                        const { outline, outlineOffset, ...rest } = (n.style ?? {}) as any;
+                        return { ...n, style: Object.keys(rest).length ? rest : undefined };
+                      }));
+                    }, 2000);
+                  }
+                }}
+                placeholder="Find table…"
+                style={{
+                  border: "none",
+                  outline: "none",
+                  fontSize: 12,
+                  width: 140,
+                  color: "#1e293b",
+                  background: "transparent",
+                }}
+              />
+              {erdSearch && (
+                <button
+                  onClick={() => setErdSearch("")}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", fontSize: 14, padding: 0, lineHeight: 1 }}
+                >×</button>
+              )}
+            </div>
+          </Panel>
+        )}
         {pendingConnectSource && (
           <Panel position="top-center" style={{ zIndex: 10 }}>
             <div style={{
@@ -652,14 +993,16 @@ export function DiagramCanvas({
           columns={interfaceEdit.values}
           onSave={handleSaveInterfaces}
           onClose={() => setInterfaceEdit(null)}
+          mode="interface"
         />
       )}
       {classMemberEdit && (
         <ColumnEditorDialog
-          tableName={`${classMemberEdit.label} — ${classMemberEdit.field === "attributes" ? "Attributes" : "Methods"}`}
+          tableName={classMemberEdit.label}
           columns={classMemberEdit.values}
           onSave={handleSaveClassMembers}
           onClose={() => setClassMemberEdit(null)}
+          mode={classMemberEdit.field === "attributes" ? "attribute" : "method"}
         />
       )}
     </div>

@@ -157,21 +157,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store traceability links — map content IDs to artifact UUIDs and preserve node IDs
-    if (result.traceabilityLinks.length > 0) {
-      const links = result.traceabilityLinks
+    // Store traceability links — prefer AI-populated linkedRequirements, fall back to semantic analysis
+    let linksToSave = result.traceabilityLinks;
+
+    if (linksToSave.length === 0) {
+      // AI didn't populate linkedRequirements on nodes — run semantic analysis as fallback
+      try {
+        linksToSave = await architect.createTraceabilityLinks(
+          requirements,
+          result.diagram,
+          user.id,
+        );
+      } catch (err) {
+        console.warn("Fallback link creation failed", err);
+      }
+    }
+
+    if (linksToSave.length > 0) {
+      const links = linksToSave
         .map((link) => {
-          // link.sourceId is a requirement content ID (e.g. "REQ_ABC123")
-          // link.targetId is a diagram node string ID (e.g. "AUTH_SERVICE")
           const reqArtifactId = contentIdToArtifactId.get(link.sourceId);
           if (!reqArtifactId) {
             console.warn(`Could not find artifact ID for requirement ${link.sourceId}`);
             return null;
           }
           return {
-            source_id: reqArtifactId,        // requirement artifact UUID
-            target_id: diagramArtifact.id,   // diagram artifact UUID
-            target_node_id: link.targetId,   // React Flow node string ID
+            source_id: reqArtifactId,
+            target_id: diagramArtifact.id,
+            target_node_id: link.targetId,
             link_type: link.linkType,
             confidence: link.confidence,
             created_by: user.id,
@@ -184,10 +197,12 @@ export async function POST(request: NextRequest) {
         new Map(links.map((l) => [`${l.source_id}-${l.target_node_id}`, l])).values()
       );
 
+      console.log(`Saving ${uniqueLinks.length} traceability links (${linksToSave.length} raw, ${links.length} mapped)`);
+
       if (uniqueLinks.length > 0) {
         const { error: linksError } = await supabase
           .from("traceability_links")
-          .insert(uniqueLinks);
+          .upsert(uniqueLinks, { onConflict: "source_id,target_id,link_type", ignoreDuplicates: true });
         if (linksError) console.error("Failed to insert traceability links", linksError);
       }
     }

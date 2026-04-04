@@ -487,10 +487,14 @@ export default function RequirementsClient({
         </div>
         <RequirementsTable
           requirements={requirements}
+          links={[]}
+          diagrams={[]}
+          dependencies={[]}
           onUpdate={handleUpdate}
           onCreate={handleCreate}
           onEditDetails={handleEditDetails}
           onDelete={handleDelete}
+          onNavigateToNode={() => {}}
         />
       </div>
 
@@ -500,6 +504,10 @@ export default function RequirementsClient({
         open={showDetailsDialog}
         onOpenChange={setShowDetailsDialog}
         onSave={handleSaveDetails}
+        allRequirements={requirements as any[]}
+        dependencies={[]}
+        onDependencyCreated={() => {}}
+        onDependencyDeleted={() => {}}
       />
 
       {/* Text to requirements dialog */}
@@ -511,6 +519,7 @@ export default function RequirementsClient({
         onRequirementCreated={handleRequirementCreated}
         onGenerationStart={handleGenerationStart}
         onGenerationComplete={handleGenerationComplete}
+        onDependencyCreated={() => {}}
       />
 
       {/* Sync suggestions panel */}

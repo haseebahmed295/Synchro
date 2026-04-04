@@ -287,6 +287,8 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
           setDiagrams((prev) => [...prev, parsed]);
           setSelectedDiagramId(parsed.id);
           setShowCreateDiagram(false);
+          // Refresh links now that the new diagram's traceability links are saved
+          getLinksForProject(selectedProject.id).then(setLinks).catch(console.error);
           return;
         }
       }
