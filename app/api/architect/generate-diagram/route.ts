@@ -157,20 +157,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store traceability links - map content IDs to artifact UUIDs
+    // Store traceability links — map content IDs to artifact UUIDs and preserve node IDs
     if (result.traceabilityLinks.length > 0) {
       const links = result.traceabilityLinks
         .map((link) => {
-          // Map requirement content ID to artifact UUID
-          const artifactId = contentIdToArtifactId.get(link.sourceId);
-          if (!artifactId) {
+          // link.sourceId is a requirement content ID (e.g. "REQ_ABC123")
+          // link.targetId is a diagram node string ID (e.g. "AUTH_SERVICE")
+          const reqArtifactId = contentIdToArtifactId.get(link.sourceId);
+          if (!reqArtifactId) {
             console.warn(`Could not find artifact ID for requirement ${link.sourceId}`);
             return null;
           }
-          
           return {
-            source_id: artifactId, // Use artifact UUID instead of content ID
-            target_id: diagramArtifact.id, // Link to diagram artifact, not individual nodes
+            source_id: reqArtifactId,        // requirement artifact UUID
+            target_id: diagramArtifact.id,   // diagram artifact UUID
+            target_node_id: link.targetId,   // React Flow node string ID
             link_type: link.linkType,
             confidence: link.confidence,
             created_by: user.id,
@@ -178,22 +179,16 @@ export async function POST(request: NextRequest) {
         })
         .filter((link): link is NonNullable<typeof link> => link !== null);
 
-      // Deduplicate links by source_id + target_id combination
+      // Deduplicate by source + node
       const uniqueLinks = Array.from(
-        new Map(
-          links.map(link => [`${link.source_id}-${link.target_id}`, link])
-        ).values()
+        new Map(links.map((l) => [`${l.source_id}-${l.target_node_id}`, l])).values()
       );
 
       if (uniqueLinks.length > 0) {
         const { error: linksError } = await supabase
           .from("traceability_links")
           .insert(uniqueLinks);
-
-        if (linksError) {
-          console.error("Failed to insert traceability links", linksError);
-          // Don't fail the request, just log the error
-        }
+        if (linksError) console.error("Failed to insert traceability links", linksError);
       }
     }
 

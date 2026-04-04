@@ -12,12 +12,26 @@ import type { JSONPatch } from "./json-patch";
  * Requirement schema matching the stable key JSON schema from design
  */
 export const RequirementSchema = z.object({
-  id: z.string().min(1), // Relaxed - we'll generate proper IDs ourselves
+  id: z.string().min(1),
   title: z.string().min(1).max(200),
   description: z.string().min(1),
-  type: z.enum(["functional", "non-functional", "Functional", "Non-functional", "Non-Functional"]).transform(val => val.toLowerCase() as "functional" | "non-functional"),
-  priority: z.enum(["low", "medium", "high", "Low", "Medium", "High"]).transform(val => val.toLowerCase() as "low" | "medium" | "high"),
-  status: z.enum(["draft", "validated", "implemented", "Draft", "Validated", "Implemented"]).transform(val => val.toLowerCase() as "draft" | "validated" | "implemented"),
+  type: z.string().transform((val) => {
+    const v = val.toLowerCase().replace(/[^a-z-]/g, "");
+    return (v.includes("non") ? "non-functional" : "functional") as "functional" | "non-functional";
+  }),
+  priority: z.string().transform((val) => {
+    const v = val.toLowerCase().trim();
+    if (v === "high") return "high" as const;
+    if (v === "low") return "low" as const;
+    return "medium" as const;
+  }),
+  status: z.string().transform((val) => {
+    const v = val.toLowerCase().trim();
+    if (v === "validated") return "validated" as const;
+    if (v === "implemented") return "implemented" as const;
+    return "draft" as const;
+  }),
+  tags: z.array(z.string()).default([]),
   links: z.array(z.string()).default([]),
   metadata: z
     .object({
@@ -31,10 +45,28 @@ export const RequirementSchema = z.object({
 export type Requirement = z.infer<typeof RequirementSchema>;
 
 /**
- * Schema for multiple requirements extraction
+ * Dependency suggestion from AI — uses temp IDs that get resolved after insert
+ */
+export const DependencySuggestionSchema = z.object({
+  source_temp_id: z.string(),
+  target_temp_id: z.string(),
+  dependency_type: z.string().transform((val) => {
+    const v = val.toLowerCase().trim();
+    if (v.includes("parent") || v.includes("child") || v.includes("epic")) return "parent_of" as const;
+    if (v.includes("dup")) return "duplicates" as const;
+    return "blocks" as const;
+  }),
+  reasoning: z.string().optional().default(""),
+});
+
+export type DependencySuggestion = z.infer<typeof DependencySuggestionSchema>;
+
+/**
+ * Schema for multiple requirements extraction with dependencies
  */
 const RequirementsExtractionSchema = z.object({
   requirements: z.array(RequirementSchema),
+  dependencies: z.array(DependencySuggestionSchema).default([]),
 });
 
 /**
@@ -50,10 +82,10 @@ export class AnalystAgent {
     rawText: string,
     projectId: string,
     userId: string,
-  ): Promise<Requirement[]> {
-    const systemPrompt = `You are an expert requirements analyst. Extract structured software requirements from text.
+  ): Promise<{ requirements: Requirement[]; dependencies: DependencySuggestion[] }> {
+    const systemPrompt = `You are an expert requirements analyst. Extract structured software requirements from text, assign relevant tags, and identify dependencies between them.
 
-Return ONLY valid JSON in this format:
+Return ONLY valid JSON in this exact format:
 {
   "requirements": [
     {
@@ -63,24 +95,37 @@ Return ONLY valid JSON in this format:
       "type": "functional",
       "priority": "medium",
       "status": "draft",
+      "tags": ["authentication", "security"],
       "links": []
+    }
+  ],
+  "dependencies": [
+    {
+      "source_temp_id": "temp_1",
+      "target_temp_id": "temp_2",
+      "dependency_type": "blocks",
+      "reasoning": "User auth must exist before profile management"
     }
   ]
 }
 
-Rules:
-- "id" can be any string (we'll generate proper IDs)
-- "type" must be "functional" or "non-functional"
-- "priority" must be "low", "medium", or "high"
-- "status" should be "draft"
-- "links" should be an empty array
-- Each requirement should be atomic and testable
-- Functional requirements describe what the system does
-- Non-functional requirements describe quality attributes`;
+Rules for requirements:
+- "id" must be unique strings like "temp_1", "temp_2" etc — used to wire up dependencies
+- "type": "functional" or "non-functional"
+- "priority": "low", "medium", or "high"
+- "status": always "draft"
+- "tags": 1-4 lowercase keywords describing the domain (e.g. ["auth", "security"], ["database", "performance"])
+- "links": always empty array
 
-    const prompt = `Extract requirements from this text. Return ONLY JSON:
+Rules for dependencies (IMPORTANT — reference the temp IDs you just generated above):
+- Only create dependencies clearly implied by the text
+- "blocks": source must be done before target can start
+- "parent_of": source is an epic containing the target as a child
+- "duplicates": source and target describe the same thing
+- Avoid cycles (A blocks B blocks A)
+- Only use temp IDs that exist in the requirements array above`;
 
-${rawText}`;
+    const prompt = `Extract requirements and their dependencies from this text. Return ONLY JSON:\n\n${rawText}`;
 
     try {
       const result = await generateAIObject(
@@ -90,17 +135,13 @@ ${rawText}`;
         systemPrompt,
       );
 
-      // Add metadata and proper IDs to each requirement
       const timestamp = new Date().toISOString();
       let counter = 1;
-      
+
       const requirementsWithMetadata = result.requirements.map((req) => {
-        const properReqId = `REQ_${Date.now().toString(36).toUpperCase()}_${counter.toString().padStart(3, '0')}`;
         counter++;
-        
         return {
           ...req,
-          id: properReqId,
           type: req.type.toLowerCase() as "functional" | "non-functional",
           priority: req.priority.toLowerCase() as "low" | "medium" | "high",
           status: "draft" as const,
@@ -108,20 +149,18 @@ ${rawText}`;
           metadata: {
             created_at: timestamp,
             created_by: userId,
-            tags: [],
+            tags: req.tags ?? [],
           },
         };
       });
 
-      return requirementsWithMetadata;
+      return {
+        requirements: requirementsWithMetadata,
+        dependencies: result.dependencies ?? [],
+      };
     } catch (error) {
       console.error("Failed to ingest text requirements", error);
-      
-      // Log the actual error details for debugging
-      if (error instanceof Error) {
-        console.error("Error details:", error.message);
-      }
-      
+      if (error instanceof Error) console.error("Error details:", error.message);
       throw new Error(
         `Requirement ingestion failed: ${error instanceof Error ? error.message : "Unknown error"}`,
       );
@@ -137,10 +176,10 @@ ${rawText}`;
     projectId: string,
     userId: string,
     onRequirement: (requirement: Requirement) => Promise<void>,
-  ): Promise<void> {
-    const systemPrompt = `You are an expert requirements analyst. Extract structured software requirements from text.
+  ): Promise<DependencySuggestion[]> {
+    const systemPrompt = `You are an expert requirements analyst. Extract structured software requirements from text, assign relevant tags, and identify dependencies between them.
 
-Return ONLY valid JSON in this format:
+Return ONLY valid JSON in this exact format:
 {
   "requirements": [
     {
@@ -150,28 +189,42 @@ Return ONLY valid JSON in this format:
       "type": "functional",
       "priority": "medium",
       "status": "draft",
+      "tags": ["authentication", "security"],
       "links": []
+    }
+  ],
+  "dependencies": [
+    {
+      "source_temp_id": "temp_1",
+      "target_temp_id": "temp_2",
+      "dependency_type": "blocks",
+      "reasoning": "User auth must exist before profile management"
     }
   ]
 }
 
-Rules:
-- "id" can be any string (we'll generate proper IDs)
-- "type" must be "functional" or "non-functional"
-- "priority" must be "low", "medium", or "high"
-- "status" should be "draft"
-- "links" should be an empty array
-- Each requirement should be atomic and testable
-- Functional requirements describe what the system does
-- Non-functional requirements describe quality attributes`;
+Rules for requirements:
+- "id" must be unique strings like "temp_1", "temp_2" etc — used to wire up dependencies
+- "type": "functional" or "non-functional"
+- "priority": "low", "medium", or "high"
+- "status": always "draft"
+- "tags": 1-4 lowercase keywords describing the domain (e.g. ["auth", "security"], ["database", "performance"])
+- "links": always empty array
 
-    const prompt = `Extract requirements from this text. Return ONLY JSON:
+Rules for dependencies (IMPORTANT — reference the temp IDs you just generated above):
+- Only create dependencies clearly implied by the text
+- "blocks": source must be done before target can start
+- "parent_of": source is an epic containing the target as a child
+- "duplicates": source and target describe the same thing
+- Avoid cycles (A blocks B blocks A)
+- Only use temp IDs that exist in the requirements array above`;
 
-${rawText}`;
+    const prompt = `Extract requirements and their dependencies from this text. Return ONLY JSON:\n\n${rawText}`;
 
     try {
       let counter = 1;
       const timestamp = new Date().toISOString();
+      let capturedDependencies: DependencySuggestion[] = [];
 
       await generateAIObjectStreaming(
         "reasoning",
@@ -179,12 +232,8 @@ ${rawText}`;
         RequirementsExtractionSchema,
         systemPrompt,
         async (req) => {
-          // Generate a proper REQ_ID
-          const properReqId = `REQ_${Date.now().toString(36).toUpperCase()}_${counter.toString().padStart(3, '0')}`;
-          
           const requirementWithMetadata: Requirement = {
             ...req,
-            id: properReqId,
             type: req.type.toLowerCase() as "functional" | "non-functional",
             priority: req.priority.toLowerCase() as "low" | "medium" | "high",
             status: "draft",
@@ -192,22 +241,21 @@ ${rawText}`;
             metadata: {
               created_at: timestamp,
               created_by: userId,
-              tags: [],
+              tags: req.tags ?? [],
             },
           };
-          
+
           console.log(`[Analyst] Validated requirement ${counter}:`, requirementWithMetadata.title);
           await onRequirement(requirementWithMetadata);
           counter++;
         },
+        (deps) => { capturedDependencies = deps ?? []; },
       );
+
+      return capturedDependencies;
     } catch (error) {
       console.error("Failed to ingest text requirements", error);
-      
-      if (error instanceof Error) {
-        console.error("Error details:", error.message);
-      }
-      
+      if (error instanceof Error) console.error("Error details:", error.message);
       throw new Error(
         `Requirement ingestion failed: ${error instanceof Error ? error.message : "Unknown error"}`,
       );

@@ -53,8 +53,9 @@ export interface AgentState {
 
 export interface TraceabilityLink {
   id?: string;
-  sourceId: string;
-  targetId: string;
+  sourceId: string;       // requirement artifact UUID
+  targetId: string;       // diagram artifact UUID
+  targetNodeId?: string;  // React Flow node string ID within the diagram (e.g. "AUTH_SERVICE")
   linkType: LinkType;
   confidence: number;
   createdBy: string;

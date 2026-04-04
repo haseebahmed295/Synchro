@@ -117,12 +117,12 @@ export default function SyncSuggestionsPanel({
               />
             )}
 
-            <div className="mt-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500">
+            <div className="mt-3 flex flex-wrap items-center gap-2 justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs text-gray-500 shrink-0">
                   Confidence: {Math.round(suggestion.confidence * 100)}%
                 </span>
-                <div className="h-2 w-24 bg-gray-200 rounded-full overflow-hidden">
+                <div className="h-2 w-16 shrink-0 bg-gray-200 rounded-full overflow-hidden">
                   <div
                     className={`h-full ${
                       suggestion.confidence > 0.7

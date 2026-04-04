@@ -15,14 +15,19 @@ export interface ContextMenuProps {
   onDelete: (kind: "node" | "edge", id: string) => void;
   onEditLabel: (kind: "node" | "edge", id: string, current: string) => void;
   onEditColumns?: (id: string, label: string) => void;
+  onEditInterfaces?: (id: string, label: string, field: "provided" | "required") => void;
+  onEditClassMembers?: (id: string, label: string, field: "attributes" | "methods") => void;
   onAddChild?: (parentId: string, type: string, defaultLabel: string) => void;
+  onStartConnect?: (sourceId: string) => void;
   onClose: () => void;
 }
 
-export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns, onAddChild, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns, onEditInterfaces, onEditClassMembers, onAddChild, onStartConnect, onClose }: ContextMenuProps) {
   const isErdNode = target.kind === "node" && target.nodeType === "entity";
   const isDevice = target.kind === "node" && (target.nodeType === "deploymentNode" || target.nodeType === "node");
   const isExecEnv = target.kind === "node" && target.nodeType === "executionEnvironment";
+  const isComponentNode = target.kind === "node" && target.nodeType === "componentDiagram";
+  const isClassNode = target.kind === "node" && target.nodeType === "class";
 
   return (
     <>
@@ -86,6 +91,37 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
           </>
         )}
 
+        {isClassNode && onEditClassMembers && (
+          <>
+            <button
+              onClick={() => { onEditClassMembers(target.id, target.label, "attributes"); onClose(); }}
+              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#1e40af" }}
+              onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
+              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+            >
+              📋 Edit attributes
+            </button>
+            <button
+              onClick={() => { onEditClassMembers(target.id, target.label, "methods"); onClose(); }}
+              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#1e40af" }}
+              onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
+              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+            >
+              ⚙️ Edit methods
+            </button>
+          </>
+        )}
+        {target.kind === "node" && onStartConnect && (
+          <button
+            onClick={() => { onStartConnect(target.id); onClose(); }}
+            style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#2563eb" }}
+            onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
+            onMouseLeave={e => (e.currentTarget.style.background = "none")}
+          >
+            🔗 Connect from here
+          </button>
+        )}
+
         <button
           onClick={() => { onEditLabel(target.kind, target.id, target.label); onClose(); }}
           style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#111827" }}
@@ -103,6 +139,26 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
           >
             🗂️ Edit columns
           </button>
+        )}
+        {isComponentNode && onEditInterfaces && (
+          <>
+            <button
+              onClick={() => { onEditInterfaces(target.id, target.label, "provided"); onClose(); }}
+              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#065f46" }}
+              onMouseEnter={e => (e.currentTarget.style.background = "#f0fdf4")}
+              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+            >
+              ○ Edit provided interfaces
+            </button>
+            <button
+              onClick={() => { onEditInterfaces(target.id, target.label, "required"); onClose(); }}
+              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#92400e" }}
+              onMouseEnter={e => (e.currentTarget.style.background = "#fffbeb")}
+              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+            >
+              ◑ Edit required interfaces
+            </button>
+          </>
         )}
         <button
           onClick={() => { onDelete(target.kind, target.id); onClose(); }}

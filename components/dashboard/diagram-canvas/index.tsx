@@ -10,6 +10,7 @@ import {
   Controls,
   type Edge,
   type EdgeChange,
+  MarkerType,
   MiniMap,
   type Node,
   type NodeChange,
@@ -22,7 +23,7 @@ import type { DiagramEdge, DiagramNode, NodeType } from "@/lib/types/diagram";
 
 import { ColumnEditorDialog, ContextMenu, EditLabelDialog, type CtxTarget } from "./shared";
 import { ClassNode } from "./nodes-class";
-import { LifelineNode, SequenceEdge } from "./nodes-sequence";
+import { LifelineNode, SequenceEdge, SEQ_MSG_START_Y, SEQ_MSG_SPACING } from "./nodes-sequence";
 import { ArtifactNode, ComponentNode, DeploymentNode, ExecEnvNode, InterfaceNode } from "./nodes-deployment";
 import { ComponentDiagramNode, ProvidedInterfaceNode, RequiredInterfaceNode } from "./nodes-component";
 import { ErdTableNode } from "./nodes-erd";
@@ -135,6 +136,8 @@ export interface DiagramCanvasProps {
   diagramType?: string;
   onNodesChange?: (nodes: DiagramNode[]) => void;
   onEdgesChange?: (edges: DiagramEdge[]) => void;
+  onNodeClick?: (nodeId: string) => void;
+  highlightNodeId?: string | null;
   readOnly?: boolean;
 }
 
@@ -144,6 +147,8 @@ export function DiagramCanvas({
   diagramType,
   onNodesChange,
   onEdgesChange,
+  onNodeClick,
+  highlightNodeId,
   readOnly = false,
 }: DiagramCanvasProps) {
   const isSeq = diagramType === "sequence";
@@ -163,6 +168,29 @@ export function DiagramCanvas({
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; target: CtxTarget } | null>(null);
   const [editTarget, setEditTarget] = useState<{ kind: "node" | "edge"; id: string; current: string } | null>(null);
   const [columnEdit, setColumnEdit] = useState<{ id: string; label: string; columns: string[] } | null>(null);
+  const [interfaceEdit, setInterfaceEdit] = useState<{ id: string; label: string; field: "provided" | "required"; values: string[] } | null>(null);
+  const [classMemberEdit, setClassMemberEdit] = useState<{ id: string; label: string; field: "attributes" | "methods"; values: string[] } | null>(null);
+  const [pendingConnectSource, setPendingConnectSource] = useState<string | null>(null);
+
+  // Highlight a node when navigating from requirements table
+  useEffect(() => {
+    if (!highlightNodeId) return;
+    setFlowNodes((prev) => prev.map((n) => ({
+      ...n,
+      style: n.id === highlightNodeId
+        ? { ...n.style, outline: "3px solid #6366f1", outlineOffset: "2px", borderRadius: "6px" }
+        : n.style,
+    })));
+    // Remove highlight after 2s
+    const t = setTimeout(() => {
+      setFlowNodes((prev) => prev.map((n) => {
+        if (n.id !== highlightNodeId) return n;
+        const { outline, outlineOffset, borderRadius, ...rest } = n.style as any ?? {};
+        return { ...n, style: Object.keys(rest).length ? rest : undefined };
+      }));
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [highlightNodeId]);
 
   const diagramTypeRef = useRef(diagramType);
 
@@ -228,7 +256,26 @@ export function DiagramCanvas({
   }, [diagramEdges, onEdgesChange]);
 
   const handleConnect = useCallback((connection: Connection) => {
-    const updated = addEdge(connection, flowEdgesRef.current);
+    const edgeDefaults: Partial<Edge> = isFlow
+      ? {
+          type: "default",
+          style: { stroke: "#6366f1", strokeWidth: 2, strokeDasharray: "6 3" },
+          markerEnd: { type: MarkerType.ArrowClosed, color: "#6366f1", width: 14, height: 14 },
+        }
+      : isComp
+      ? {
+          type: "smoothstep",
+          style: { stroke: "#6366f1", strokeWidth: 1.5, strokeDasharray: "5 3" },
+          markerEnd: { type: MarkerType.ArrowClosed, color: "#6366f1", width: 14, height: 14 },
+        }
+      : !isSeq && !isDeploy && !isErd
+      ? {
+          type: "smoothstep",
+          style: { stroke: "#374151", strokeWidth: 1.5 },
+          markerEnd: { type: MarkerType.Arrow, color: "#374151" },
+        }
+      : {};
+    const updated = addEdge({ ...connection, ...edgeDefaults }, flowEdgesRef.current);
     flowEdgesRef.current = updated;
     setFlowEdges(updated);
     if (onEdgesChange) {
@@ -237,14 +284,52 @@ export function DiagramCanvas({
         return orig ?? { id: fe.id, source: fe.source, target: fe.target, type: "association" };
       }));
     }
-  }, [diagramEdges, onEdgesChange]);
+  }, [isFlow, diagramEdges, onEdgesChange]);
 
   const handleNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
     if (readOnly) return;
     e.preventDefault();
+    setPendingConnectSource(null);
     setCtxMenu({ x: e.clientX, y: e.clientY, target: { kind: "node", id: node.id, label: String(node.data.label ?? ""), nodeType: node.type } });
   }, [readOnly]);
 
+  const handleStartConnect = useCallback((sourceId: string) => {
+    setPendingConnectSource(sourceId);
+  }, []);
+
+  const handleNodeClick = useCallback((_e: React.MouseEvent, node: Node) => {
+    if (!pendingConnectSource) return;
+    if (node.id === pendingConnectSource) { setPendingConnectSource(null); return; }
+
+    // For sequence diagrams use the sequence edge type with a default msgY
+    const existingSeqEdges = flowEdgesRef.current.filter((e) => e.type === "sequence");
+    const newEdge: Edge = isSeq
+      ? {
+          id: `edge_${Date.now()}`,
+          source: pendingConnectSource,
+          target: node.id,
+          type: "sequence",
+          label: "",
+          data: { msgY: SEQ_MSG_START_Y + existingSeqEdges.length * SEQ_MSG_SPACING },
+        }
+      : {
+          id: `edge_${Date.now()}`,
+          source: pendingConnectSource,
+          target: node.id,
+          type: "straight",
+          markerEnd: { type: MarkerType.ArrowClosed },
+        };
+    const updated = [...flowEdgesRef.current, newEdge];
+    flowEdgesRef.current = updated;
+    setFlowEdges(updated);
+    setPendingConnectSource(null);
+    if (onEdgesChange) {
+      onEdgesChange(updated.map((fe) => {
+        const orig = diagramEdges.find((e) => e.id === fe.id);
+        return orig ?? { id: fe.id, source: fe.source, target: fe.target, type: "association" };
+      }));
+    }
+  }, [pendingConnectSource, diagramEdges, onEdgesChange]);
   const handleEdgeContextMenu = useCallback((e: React.MouseEvent, edge: Edge) => {
     if (readOnly) return;
     e.preventDefault();
@@ -306,6 +391,41 @@ export function DiagramCanvas({
     setColumnEdit(null);
   }, [columnEdit, diagramNodes, onNodesChange]);
 
+  const handleEditInterfaces = useCallback((id: string, label: string, field: "provided" | "required") => {
+    const node = flowNodesRef.current.find((n) => n.id === id);
+    const dataKey = field === "provided" ? "attributes" : "methods";
+    const values = (node?.data[dataKey] as string[]) ?? [];
+    setInterfaceEdit({ id, label, field, values });
+  }, []);
+
+  const handleSaveInterfaces = useCallback((newValues: string[]) => {
+    if (!interfaceEdit) return;
+    const dataKey = interfaceEdit.field === "provided" ? "attributes" : "methods";
+    const updated = flowNodesRef.current.map((n) =>
+      n.id === interfaceEdit.id ? { ...n, data: { ...n.data, [dataKey]: newValues } } : n
+    );
+    flowNodesRef.current = updated;
+    setFlowNodes(updated);
+    if (onNodesChange) onNodesChange(flowNodesToDiagramNodes(updated, diagramNodes));
+    setInterfaceEdit(null);
+  }, [interfaceEdit, diagramNodes, onNodesChange]);
+
+  const handleEditClassMembers = useCallback((id: string, label: string, field: "attributes" | "methods") => {
+    const node = flowNodesRef.current.find((n) => n.id === id);
+    const values = (node?.data[field] as string[]) ?? [];
+    setClassMemberEdit({ id, label, field, values });
+  }, []);
+
+  const handleSaveClassMembers = useCallback((newValues: string[]) => {
+    if (!classMemberEdit) return;
+    const updated = flowNodesRef.current.map((n) =>
+      n.id === classMemberEdit.id ? { ...n, data: { ...n.data, [classMemberEdit.field]: newValues } } : n
+    );
+    flowNodesRef.current = updated;
+    setFlowNodes(updated);
+    if (onNodesChange) onNodesChange(flowNodesToDiagramNodes(updated, diagramNodes));
+    setClassMemberEdit(null);
+  }, [classMemberEdit, diagramNodes, onNodesChange]);
   const handleSaveLabel = useCallback((newLabel: string) => {
     if (!editTarget) return;
     if (editTarget.kind === "node") {
@@ -379,9 +499,11 @@ export function DiagramCanvas({
 
   const handleAddNode = useCallback((type: string, defaultLabel: string) => {
     // Child-only types must be added via right-click on a parent, not the toolbar
-    if (CHILD_ONLY_TYPES.has(type)) return;
+    // Exception: "component" is top-level in component diagrams
+    const blocked = isDeploy ? CHILD_ONLY_TYPES : new Set([...CHILD_ONLY_TYPES].filter((t) => t !== "component"));
+    if (blocked.has(type)) return;
 
-    const rfType = type === "node" ? "deploymentNode" : type;
+    const rfType = type === "node" ? "deploymentNode" : type === "component" && isComp ? "componentDiagram" : type;
     const isContainer = type === "node";
     const prev = flowNodesRef.current;
     const offset = prev.length * 20;
@@ -415,19 +537,39 @@ export function DiagramCanvas({
         onNodesChange={readOnly ? undefined : handleNodesChange}
         onEdgesChange={readOnly ? undefined : handleEdgesChange}
         onConnect={readOnly ? undefined : handleConnect}
+        onNodeClick={pendingConnectSource ? handleNodeClick : (onNodeClick ? (_e, node) => onNodeClick(node.id) : undefined)}
         onNodeContextMenu={handleNodeContextMenu}
         onEdgeContextMenu={handleEdgeContextMenu}
-        nodesDraggable={!readOnly}
+        nodesDraggable={!readOnly && !pendingConnectSource}
         nodesConnectable={!readOnly}
         elementsSelectable={!readOnly}
+        connectOnClick={!readOnly}
+        style={pendingConnectSource ? { cursor: "crosshair" } : undefined}
         fitView
         fitViewOptions={{ padding: 0.15 }}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
         <Controls />
         {!isSeq && <MiniMap nodeColor="#1e40af" />}
+        {pendingConnectSource && (
+          <Panel position="top-center" style={{ zIndex: 10 }}>
+            <div style={{
+              background: "#2563eb", color: "#fff", borderRadius: 8,
+              padding: "6px 16px", fontSize: 13, fontWeight: 500,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.15)", display: "flex", alignItems: "center", gap: 10,
+            }}>
+              🔗 Click a node to connect — or{" "}
+              <button
+                onClick={() => setPendingConnectSource(null)}
+                style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: 4, padding: "2px 8px", cursor: "pointer", fontSize: 12 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </Panel>
+        )}
         {!readOnly && (NODE_PALETTE[diagramType ?? ""] ?? []).length > 0 && (
-          <Panel position="top-left">
+          <Panel position="top-left" style={{ zIndex: 10 }}>
             <div style={{
               background: "#fff",
               border: "1px solid #e5e7eb",
@@ -482,7 +624,10 @@ export function DiagramCanvas({
           onDelete={handleDelete}
           onEditLabel={handleEditLabel}
           onEditColumns={isErd ? handleEditColumns : undefined}
+          onEditInterfaces={isComp ? handleEditInterfaces : undefined}
+          onEditClassMembers={!isErd && !isComp && !isSeq && !isDeploy && !isFlow ? handleEditClassMembers : undefined}
           onAddChild={isDeploy ? handleAddDeployChild : undefined}
+          onStartConnect={isSeq ? handleStartConnect : undefined}
           onClose={() => setCtxMenu(null)}
         />
       )}
@@ -499,6 +644,22 @@ export function DiagramCanvas({
           columns={columnEdit.columns}
           onSave={handleSaveColumns}
           onClose={() => setColumnEdit(null)}
+        />
+      )}
+      {interfaceEdit && (
+        <ColumnEditorDialog
+          tableName={`${interfaceEdit.label} — ${interfaceEdit.field === "provided" ? "Provided" : "Required"} Interfaces`}
+          columns={interfaceEdit.values}
+          onSave={handleSaveInterfaces}
+          onClose={() => setInterfaceEdit(null)}
+        />
+      )}
+      {classMemberEdit && (
+        <ColumnEditorDialog
+          tableName={`${classMemberEdit.label} — ${classMemberEdit.field === "attributes" ? "Attributes" : "Methods"}`}
+          columns={classMemberEdit.values}
+          onSave={handleSaveClassMembers}
+          onClose={() => setClassMemberEdit(null)}
         />
       )}
     </div>

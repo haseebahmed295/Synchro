@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -32,7 +32,7 @@ import { Button } from "@/components/ui/button";
 import { DiagramCanvas } from "@/components/dashboard/diagram-canvas";
 import { CreateDiagramDialog } from "@/components/dashboard/create-diagram-dialog";
 import SyncSuggestionsPanel from "@/components/dashboard/sync-suggestions-panel";
-import type { RequirementSuggestion } from "@/lib/agents/architect";
+import type { DiagramSuggestion } from "@/lib/agents/architect";
 import { createClient } from "@/lib/supabase/client";
 import type { Diagram, DiagramEdge, DiagramNode } from "@/lib/types/diagram";
 import { computeLayout } from "@/lib/utils/diagram-layout";
@@ -84,7 +84,7 @@ export function DiagramsClient({
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [suggestions, setSuggestions] = useState<RequirementSuggestion[]>([]);
+  const [suggestions, setSuggestions] = useState<DiagramSuggestion[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [layoutVersion, setLayoutVersion] = useState(0);
   const router = useRouter();
@@ -229,22 +229,19 @@ export function DiagramsClient({
 
   const handleGenerateSuggestions = useCallback(async () => {
     if (!selectedDiagram) return;
-    if (selectedDiagram.nodes.length === 0) {
-      alert("Cannot sync an empty diagram. Add some nodes first.");
-      return;
-    }
     setLoadingSuggestions(true);
     try {
-      const res = await fetch("/api/architect/suggest-requirements", {
+      const res = await fetch("/api/architect/suggest-diagram-updates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ diagramId: selectedDiagram.id, projectId }),
+        // Empty patch = full sync: AI compares all requirements against current diagram
+        body: JSON.stringify({ requirementDelta: [], diagramId: selectedDiagram.id, projectId }),
       });
       if (!res.ok) throw new Error((await res.json()).error || "Failed");
       const data = await res.json();
       setSuggestions(data.suggestions || []);
       setShowSuggestions(true);
-      if (!data.suggestions?.length) alert("No suggestions generated.");
+      if (!data.suggestions?.length) alert("Diagram is already in sync with requirements.");
     } catch (err) {
       alert(`Failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
@@ -365,6 +362,16 @@ export function DiagramsClient({
                   >
                     {loadingSuggestions ? "Analyzing…" : "Sync to Requirements"}
                   </Button>
+                  {suggestions.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant={showSuggestions ? "default" : "outline"}
+                      onClick={() => setShowSuggestions((v) => !v)}
+                      className="h-7 text-xs"
+                    >
+                      {showSuggestions ? "Hide Suggestions" : `Show Suggestions (${suggestions.length})`}
+                    </Button>
+                  )}
                 </>
               )}
             </div>
@@ -393,26 +400,25 @@ export function DiagramsClient({
 
             {/* Suggestions panel */}
             {showSuggestions && selectedDiagram && (
-              <div className="w-80 shrink-0 border-l flex flex-col overflow-hidden">
-                <div className="flex items-center justify-between border-b px-4 py-3">
-                  <span className="text-sm font-semibold">Sync Suggestions</span>
-                  <button
-                    onClick={() => setShowSuggestions(false)}
-                    className="text-muted-foreground hover:text-foreground text-xs"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto">
-                  <SyncSuggestionsPanel
-                    suggestions={suggestions}
-                    suggestionType="requirement"
-                    artifactId={selectedDiagram.id}
-                    projectId={projectId}
-                    onSuggestionApplied={() => { setSuggestions([]); setShowSuggestions(false); }}
-                  />
-                </div>
-              </div>
+              <SuggestionsPanel
+                suggestions={suggestions}
+                artifactId={selectedDiagram.id}
+                projectId={projectId}
+                onClose={() => setShowSuggestions(false)}
+                onApplied={async () => {
+                  // Reload diagram from DB so canvas reflects applied node changes
+                  const { data } = await supabase
+                    .from("artifacts")
+                    .select("*")
+                    .eq("id", selectedDiagram.id)
+                    .single();
+                  if (data) {
+                    const refreshed = parseDiagramArtifact(data);
+                    setDiagrams((prev) => prev.map((d) => d.id === refreshed.id ? refreshed : d));
+                    setLayoutVersion((v) => v + 1);
+                  }
+                }}
+              />
             )}
           </div>
         </SidebarInset>
@@ -425,5 +431,69 @@ export function DiagramsClient({
         isCreating={isCreating}
       />
     </SidebarProvider>
+  );
+}
+
+function SuggestionsPanel({
+  suggestions,
+  artifactId,
+  projectId,
+  onClose,
+  onApplied,
+}: {
+  suggestions: DiagramSuggestion[];
+  artifactId: string;
+  projectId: string;
+  onClose: () => void;
+  onApplied: () => void;
+}) {
+  const [width, setWidth] = useState(320);
+  const dragging = useRef(false);
+  const startX = useRef(0);
+  const startW = useRef(0);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    dragging.current = true;
+    startX.current = e.clientX;
+    startW.current = width;
+    e.preventDefault();
+  }, [width]);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!dragging.current) return;
+      const delta = startX.current - e.clientX;
+      setWidth(Math.max(260, Math.min(640, startW.current + delta)));
+    };
+    const onUp = () => { dragging.current = false; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
+  return (
+    <div className="shrink-0 border-l flex flex-col overflow-hidden relative" style={{ width }}>
+      {/* Drag handle */}
+      <div
+        onMouseDown={onMouseDown}
+        className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 z-10"
+      />
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <span className="text-sm font-semibold">Sync Suggestions</span>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-xs">✕</button>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        <SyncSuggestionsPanel
+          suggestions={suggestions}
+          suggestionType="diagram"
+          artifactId={artifactId}
+          projectId={projectId}
+          onSuggestionApplied={onApplied}
+        />
+      </div>
+    </div>
   );
 }

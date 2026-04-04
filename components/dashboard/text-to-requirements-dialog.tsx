@@ -23,6 +23,7 @@ interface TextToRequirementsDialogProps {
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
   onRequirementCreated: (requirement: any) => void;
+  onDependencyCreated: (dependency: any) => void;
   onGenerationStart: () => void;
   onGenerationComplete: () => void;
 }
@@ -33,6 +34,7 @@ export function TextToRequirementsDialog({
   onOpenChange,
   onSuccess,
   onRequirementCreated,
+  onDependencyCreated,
   onGenerationStart,
   onGenerationComplete,
 }: TextToRequirementsDialogProps) {
@@ -93,14 +95,13 @@ export function TextToRequirementsDialog({
 
                 if (data.type === "requirement") {
                   requirementCount = data.count;
-                  console.log(`[Frontend] Requirement ${requirementCount} created:`, data.requirement.content.title);
-                  
-                  // Immediately add to UI
                   onRequirementCreated(data.requirement);
+                } else if (data.type === "dependency") {
+                  onDependencyCreated(data.dependency);
                 } else if (data.type === "complete") {
-                  console.log(`[Frontend] All ${data.count} requirements created`);
+                  console.log(`[Frontend] Complete: ${data.count} requirements, ${data.depsCreated} dependencies`);
                 } else if (data.type === "error") {
-                  console.error("[Frontend] Error creating requirement:", data.error);
+                  console.error("[Frontend] Error:", data.error);
                 }
               } catch (e) {
                 // Ignore parse errors for incomplete chunks

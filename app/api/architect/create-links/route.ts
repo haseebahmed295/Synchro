@@ -105,10 +105,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Diagram not found" }, { status: 404 });
     }
 
-    // Extract data
-    const requirements = requirementArtifacts.map(
-      (artifact) => artifact.content,
-    );
+    // Extract data — keep a map from content req_id → artifact UUID for link resolution
+    const contentIdToArtifactId = new Map<string, string>();
+    for (const artifact of requirementArtifacts) {
+      if (artifact.content?.req_id) {
+        contentIdToArtifactId.set(artifact.content.req_id, artifact.id);
+      }
+      // Also map by artifact UUID directly in case AI returns UUIDs
+      contentIdToArtifactId.set(artifact.id, artifact.id);
+    }
+
+    const requirements = requirementArtifacts.map((artifact) => artifact.content);
     const diagram = diagramArtifact.content;
 
     // Create Architect agent and generate traceability links
@@ -125,13 +132,24 @@ export async function POST(request: NextRequest) {
 
     // Store traceability links in database
     if (traceabilityLinks.length > 0) {
-      const links = traceabilityLinks.map((link) => ({
-        source_id: link.sourceId,
-        target_id: link.targetId,
-        link_type: link.linkType,
-        confidence: link.confidence,
-        created_by: user.id,
-      }));
+      const links = traceabilityLinks
+        .map((link) => {
+          // Resolve requirement content ID → artifact UUID
+          const reqArtifactId = contentIdToArtifactId.get(link.sourceId);
+          if (!reqArtifactId) {
+            console.warn(`Could not resolve requirement ID: ${link.sourceId}`);
+            return null;
+          }
+          return {
+            source_id: reqArtifactId,       // requirement artifact UUID
+            target_id: diagramArtifact.id,  // diagram artifact UUID
+            target_node_id: link.targetId,  // React Flow node string ID
+            link_type: link.linkType,
+            confidence: link.confidence,
+            created_by: user.id,
+          };
+        })
+        .filter((l): l is NonNullable<typeof l> => l !== null);
 
       const { data: insertedLinks, error: linksError } = await supabase
         .from("traceability_links")
@@ -141,10 +159,7 @@ export async function POST(request: NextRequest) {
       if (linksError) {
         console.error("Failed to insert traceability links", linksError);
         return NextResponse.json(
-          {
-            error: "Failed to save traceability links",
-            details: linksError.message,
-          },
+          { error: "Failed to save traceability links", details: linksError.message },
           { status: 500 },
         );
       }
@@ -153,7 +168,7 @@ export async function POST(request: NextRequest) {
         success: true,
         traceabilityLinks,
         insertedLinks,
-        count: traceabilityLinks.length,
+        count: links.length,
         analysisTime,
       });
     }

@@ -244,24 +244,9 @@ export async function POST(request: NextRequest) {
         }
 
         // Create traceability links to affected nodes
-        if (reqSuggestion.affected_nodes.length > 0) {
-          const links = reqSuggestion.affected_nodes.map((nodeId) => ({
-            source_id: newRequirement.id,
-            target_id: nodeId,
-            link_type: "derives_from",
-            confidence: reqSuggestion.confidence,
-            created_by: user.id,
-          }));
-
-          const { error: linksError } = await supabase
-            .from("traceability_links")
-            .insert(links);
-
-          if (linksError) {
-            console.error("Failed to create traceability links", linksError);
-            // Don't fail the request, just log the error
-          }
-        }
+        // Note: affected_nodes are diagram node labels, not artifact UUIDs,
+        // so we skip traceability link creation here.
+        // Links can be created later when nodes are matched to requirement artifacts.
 
         return NextResponse.json({
           success: true,

@@ -74,8 +74,14 @@ export async function createRequirement(
     throw new Error("No authenticated session. Please log in again.");
   }
 
-  // Generate unique requirement ID
-  const reqId = `REQ_${Date.now().toString(36).toUpperCase()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+  // Generate project-scoped human-readable display ID via DB atomic counter
+  const { data: displayIdData, error: displayIdError } = await supabase
+    .rpc("next_req_display_id", { p_project_id: projectId });
+  if (displayIdError) {
+    console.error("Error generating display ID:", displayIdError);
+    throw new Error(`Failed to generate requirement ID: ${displayIdError.message}`);
+  }
+  const reqId: string = displayIdData;
 
   const requirementContent: RequirementContent = {
     req_id: reqId,

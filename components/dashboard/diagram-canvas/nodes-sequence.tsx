@@ -6,8 +6,10 @@ import {
   type EdgeProps,
   type NodeProps,
   Position,
+  useReactFlow,
   useStore,
 } from "@xyflow/react";
+import { useCallback, useRef, useState } from "react";
 
 export const SEQ_MSG_START_Y = 100;
 export const SEQ_MSG_SPACING = 40;
@@ -48,15 +50,43 @@ export function LifelineNode({ data }: NodeProps) {
 
 export function SequenceEdge({ id, source, target, label, data }: EdgeProps) {
   const nodes = useStore((s) => s.nodes);
+  const { updateEdgeData } = useReactFlow();
   const srcNode = nodes.find((n) => n.id === source);
   const tgtNode = nodes.find((n) => n.id === target);
+
+  const [localY, setLocalY] = useState<number | null>(null);
+  const dragStartRef = useRef<{ mouseY: number; msgY: number } | null>(null);
+
+  const msgY = localY ?? (data?.msgY as number) ?? SEQ_MSG_START_Y;
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    dragStartRef.current = { mouseY: e.clientY, msgY };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragStartRef.current) return;
+      const dy = ev.clientY - dragStartRef.current.mouseY;
+      setLocalY(dragStartRef.current.msgY + dy);
+    };
+    const onUp = (ev: MouseEvent) => {
+      if (!dragStartRef.current) return;
+      const dy = ev.clientY - dragStartRef.current.mouseY;
+      const newY = dragStartRef.current.msgY + dy;
+      updateEdgeData(id, { msgY: newY });
+      setLocalY(null);
+      dragStartRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [id, msgY, updateEdgeData]);
+
   if (!srcNode || !tgtNode) return null;
 
   const srcW = srcNode.measured?.width ?? 160;
   const tgtW = tgtNode.measured?.width ?? 160;
   const x1 = srcNode.position.x + srcW / 2;
   const x2 = tgtNode.position.x + tgtW / 2;
-  const y = (data?.msgY as number) ?? SEQ_MSG_START_Y;
   const midX = (x1 + x2) / 2;
   const goingRight = x2 > x1;
   const markerId = `arrow-${id}`;
@@ -68,17 +98,26 @@ export function SequenceEdge({ id, source, target, label, data }: EdgeProps) {
           <polygon points="0 0, 10 3.5, 0 7" fill="#374151" />
         </marker>
       </defs>
+      {/* Invisible wider hit area for dragging */}
       <line
-        x1={x1} y1={y}
-        x2={goingRight ? x2 - 1 : x2 + 1} y2={y}
+        x1={x1} y1={msgY}
+        x2={goingRight ? x2 - 1 : x2 + 1} y2={msgY}
+        stroke="transparent" strokeWidth={12}
+        style={{ cursor: "ns-resize" }}
+        onMouseDown={handleDragStart}
+      />
+      <line
+        x1={x1} y1={msgY}
+        x2={goingRight ? x2 - 1 : x2 + 1} y2={msgY}
         stroke="#374151" strokeWidth={1.5}
         markerEnd={`url(#${markerId})`}
+        style={{ pointerEvents: "none" }}
       />
       {label && (
         <EdgeLabelRenderer>
           <div style={{
             position: "absolute",
-            transform: `translate(-50%, -100%) translate(${midX}px,${y - 3}px)`,
+            transform: `translate(-50%, -100%) translate(${midX}px,${msgY - 3}px)`,
             fontSize: 11,
             color: "#1f2937",
             background: "rgba(255,255,255,0.95)",

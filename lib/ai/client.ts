@@ -100,16 +100,15 @@ export async function generateAIObjectStreaming<T>(
   schema: z.ZodSchema<T>,
   systemPrompt: string | undefined,
   onPartialObject: (obj: any) => Promise<void>,
+  onComplete?: (fullResult: T) => void,
 ): Promise<void> {
   try {
     const messages: Array<{ role: "system" | "user"; content: string }> = [];
-
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
-
+    if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
     messages.push({ role: "user", content: prompt });
 
+    // Collect the full streamed response before parsing — the incremental
+    // object-extraction approach was too fragile and caused parse errors.
     const stream = await openaiClient.chat.completions.create({
       model: "gpt-5.4-nano",
       messages,
@@ -118,82 +117,28 @@ export async function generateAIObjectStreaming<T>(
       stream: true,
     });
 
-    let buffer = "";
-    let requirementIndex = 0;
-
+    let fullContent = "";
     for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || "";
-      if (!content) continue;
-
-      console.log("[AI Stream]", content); // Log streaming content
-      buffer += content;
-
-      // Try to extract complete requirement objects from buffer
-      // Look for pattern: {...}, (requirement object followed by comma or closing bracket)
-      const requirementsMatch = buffer.match(/"requirements"\s*:\s*\[([\s\S]*)/);
-      if (requirementsMatch) {
-        const arrayContent = requirementsMatch[1];
-        
-        // Find complete requirement objects (those followed by comma or closing bracket)
-        let searchPos = 0;
-        while (true) {
-          // Find the start of a requirement object
-          const objStart = arrayContent.indexOf('{', searchPos);
-          if (objStart === -1) break;
-          
-          // Find the matching closing brace
-          let braceCount = 0;
-          let objEnd = -1;
-          for (let i = objStart; i < arrayContent.length; i++) {
-            if (arrayContent[i] === '{') braceCount++;
-            else if (arrayContent[i] === '}') {
-              braceCount--;
-              if (braceCount === 0) {
-                objEnd = i;
-                break;
-              }
-            }
-          }
-          
-          if (objEnd === -1) {
-            // Incomplete object, wait for more data
-            break;
-          }
-          
-          // Check if this object is complete (followed by comma, closing bracket, or end)
-          const afterObj = arrayContent.substring(objEnd + 1).trim();
-          if (afterObj.startsWith(',') || afterObj.startsWith(']') || afterObj === '') {
-            // Extract and parse the complete object
-            const objStr = arrayContent.substring(objStart, objEnd + 1);
-            try {
-              const reqObj = JSON.parse(objStr);
-              console.log(`[Requirement ${requirementIndex + 1}] Parsed:`, reqObj.title);
-              
-              // Validate with schema
-              const validated = schema.parse({ requirements: [reqObj] });
-              await onPartialObject((validated as any).requirements[0]);
-              
-              requirementIndex++;
-              
-              // Move search position past this object
-              searchPos = objEnd + 1;
-              
-              // Remove processed requirement from buffer to save memory
-              buffer = buffer.substring(0, requirementsMatch.index! + requirementsMatch[0].indexOf('[') + 1) + 
-                       arrayContent.substring(objEnd + 1);
-            } catch (e) {
-              console.log("[Parse Error]", e instanceof Error ? e.message : "Unknown error");
-              searchPos = objEnd + 1;
-            }
-          } else {
-            // Object might not be complete yet
-            break;
-          }
-        }
-      }
+      fullContent += chunk.choices[0]?.delta?.content ?? "";
     }
 
-    console.log("[AI Stream] Complete -", requirementIndex, "requirements processed");
+    console.log("[AI Stream] Full response received, length:", fullContent.length);
+
+    // Parse and validate the complete JSON once
+    const parsed = JSON.parse(fullContent);
+    const validated = schema.parse(parsed) as any;
+
+    // Stream each requirement to the callback so the UI updates progressively
+    const items: any[] = validated.requirements ?? [];
+    for (let i = 0; i < items.length; i++) {
+      console.log(`[Requirement ${i + 1}] Parsed:`, items[i].title);
+      await onPartialObject(items[i]);
+    }
+
+    console.log("[AI Stream] Complete —", items.length, "requirements processed");
+
+    // Deliver the full result (includes dependencies etc.)
+    if (onComplete) onComplete(validated as T);
   } catch (error) {
     console.error(`AI streaming failed for task ${taskType}`, error);
     throw error;
