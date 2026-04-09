@@ -18,7 +18,6 @@ export default function SignupPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
@@ -54,12 +53,8 @@ export default function SignupPage() {
       }
 
       if (data.user) {
-        setSuccess(true);
-        // If email confirmation is disabled, redirect immediately
-        if (data.session) {
-          router.push("/dashboard");
-          router.refresh();
-        }
+        router.push("/dashboard");
+        router.refresh();
       }
     } catch (_err) {
       setError("An unexpected error occurred");
@@ -67,30 +62,6 @@ export default function SignupPage() {
       setLoading(false);
     }
   };
-
-  if (success) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
-        <div className="w-full max-w-md space-y-8 rounded-lg bg-white p-8 shadow-lg dark:bg-zinc-900">
-          <div className="text-center">
-            <h1 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-              Check your email
-            </h1>
-            <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-              We've sent you a confirmation link. Please check your email to
-              complete your registration.
-            </p>
-            <Link
-              href="/login"
-              className="mt-6 inline-block text-sm font-medium text-zinc-900 hover:text-zinc-700 dark:text-zinc-50 dark:hover:text-zinc-300"
-            >
-              Return to login
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">

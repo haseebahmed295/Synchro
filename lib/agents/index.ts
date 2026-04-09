@@ -4,6 +4,8 @@
 
 export { AnalystAgent, type Requirement, RequirementSchema } from "./analyst";
 export { ArchitectAgent } from "./architect";
+export { ImplementerAgent } from "./implementer";
+export type { CodeFile, CodePatch, CodeTemplate, GeneratedCode, PatchHunk } from "./implementer";
 export type { JSONPatch, JSONPatchOperation } from "./json-patch";
 export { applyPatch } from "./json-patch";
 

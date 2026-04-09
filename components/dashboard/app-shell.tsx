@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
+  Code2,
+  FileCode,
   LayoutTemplate,
   LogOut,
   Plus,
@@ -36,6 +38,7 @@ import { RequirementDetailsDialog, type RequirementDetails } from "@/components/
 import { TextToRequirementsDialog } from "@/components/dashboard/text-to-requirements-dialog";
 import { NodeLinksPanel } from "@/components/dashboard/node-links-panel";
 import { ProjectsDialog } from "@/components/dashboard/projects-dialog";
+import { GenerateCodeDialog } from "@/components/dashboard/generate-code-dialog";
 import type { DiagramSuggestion } from "@/lib/agents/architect";
 import type { JSONPatch } from "@/lib/agents/json-patch";
 import { createClient } from "@/lib/supabase/client";
@@ -128,6 +131,11 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
   const [loadingReqSuggestions, setLoadingReqSuggestions] = useState(false);
   const [selectedDiagramForReq, setSelectedDiagramForReq] = useState<string | null>(null);
 
+  // ── Code state ──
+  const [codeArtifacts, setCodeArtifacts] = useState<any[]>([]);
+  const [selectedCodeId, setSelectedCodeId] = useState<string | null>(null);
+  const [showGenerateCodeDialog, setShowGenerateCodeDialog] = useState(false);
+
   // ── Traceability links state ──
   const [links, setLinks] = useState<TraceabilityLinkRow[]>([]);
   const [deps, setDeps] = useState<RequirementDependency[]>([]);
@@ -194,6 +202,16 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
     // Load traceability links
     getLinksForProject(projectId).then(setLinks).catch(console.error);
 
+    // Load code artifacts
+    setCodeArtifacts([]);
+    setSelectedCodeId(null);
+    supabase
+      .from("artifacts")
+      .select("*")
+      .eq("project_id", projectId)
+      .eq("type", "code")
+      .order("created_at", { ascending: false })
+      .then(({ data }) => { setCodeArtifacts(data ?? []); setSelectedCodeId(data?.[0]?.id ?? null); });
     // Load requirement dependencies
     getDepsForProject(projectId).then(setDeps).catch(console.error);
 
@@ -507,6 +525,54 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
                 </SidebarGroupContent>
               </SidebarGroup>
             )}
+            {view === "code" && (
+              <SidebarGroup>
+                <SidebarGroupLabel className="flex items-center justify-between pr-2">
+                  Generated Code
+                  <button onClick={() => setShowGenerateCodeDialog(true)} className="rounded p-0.5 hover:bg-sidebar-accent" title="Generate code">
+                    <Plus className="size-3.5" />
+                  </button>
+                </SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {codeArtifacts.length === 0 ? (
+                      <p className="px-2 py-4 text-xs text-muted-foreground">No code generated yet.</p>
+                    ) : (
+                      codeArtifacts.map((artifact) => {
+                        const lang = artifact.metadata?.language ?? "";
+                        const filePath = artifact.metadata?.filePath ?? artifact.id.slice(0, 8);
+                        return (
+                          <SidebarMenuItem key={artifact.id}>
+                            <SidebarMenuButton isActive={selectedCodeId === artifact.id} onClick={() => setSelectedCodeId(artifact.id)} className="pr-8">
+                              <FileCode className="size-4 shrink-0" />
+                              <span className="truncate flex-1">{filePath}</span>
+                              <span className={`shrink-0 rounded px-1 py-0.5 text-[10px] font-medium ${langBadgeClass(lang)}`}>
+                                {langShort(lang)}
+                              </span>
+                            </SidebarMenuButton>
+                            <SidebarMenuAction
+                              onClick={async () => {
+                                if (!confirm("Delete this file?")) return;
+                                await supabase.from("artifacts").delete().eq("id", artifact.id);
+                                setCodeArtifacts((prev) => {
+                                  const next = prev.filter((a) => a.id !== artifact.id);
+                                  if (selectedCodeId === artifact.id) setSelectedCodeId(next[0]?.id ?? null);
+                                  return next;
+                                });
+                              }}
+                              title="Delete"
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </SidebarMenuAction>
+                          </SidebarMenuItem>
+                        );
+                      })
+                    )}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
           </SidebarContent>
 
           <SidebarFooter className="border-t p-3">
@@ -569,7 +635,13 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
                     </Button>
                   )}
                 </>
-              )}              {view === "requirements" && (
+              )}              {view === "code" && (
+                <Button size="sm" onClick={() => setShowGenerateCodeDialog(true)} className="h-7 gap-1.5 text-xs">
+                  <Plus className="size-3" />
+                  Generate Code
+                </Button>
+              )}
+              {view === "requirements" && (
                 <>
                   <Button size="sm" variant="outline" onClick={() => setShowTextToReqDialog(true)} className="h-7 text-xs">
                     Convert Text
@@ -657,9 +729,11 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
                   />
                 </div>
               ) : (
-                <div className="flex h-full items-center justify-center text-muted-foreground text-sm">
-                  Code view coming soon.
-                </div>
+                <CodeView
+                  artifact={codeArtifacts.find((a) => a.id === selectedCodeId) ?? null}
+                  projectId={selectedProject.id}
+                  onGenerateClick={() => setShowGenerateCodeDialog(true)}
+                />
               )}
             </div>
 
@@ -747,7 +821,108 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
         onGenerationStart={() => { setIsGeneratingReqs(true); setGenerationProgress(0); }}
         onGenerationComplete={() => { setIsGeneratingReqs(false); setGenerationProgress(0); }}
       />
-    </SidebarProvider>
+      <GenerateCodeDialog
+        open={showGenerateCodeDialog}
+        onOpenChange={setShowGenerateCodeDialog}
+        diagrams={diagrams.map((d) => ({ id: d.id, content: { diagram_metadata: { name: d.metadata?.name, type: d.type } } }))}
+        onSuccess={(newArtifacts) => {
+          setCodeArtifacts((prev) => [...newArtifacts, ...prev]);
+          if (newArtifacts.length > 0) setSelectedCodeId(newArtifacts[0].id);
+        }}
+      />
+    </SidebarProvider>  );
+}
+
+// ── Code view helpers ──
+function langBadgeClass(lang: string) {
+  switch (lang?.toLowerCase()) {
+    case "typescript": return "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300";
+    case "python": return "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300";
+    case "java": return "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300";
+    default: return "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400";
+  }
+}
+
+function langShort(lang: string) {
+  switch (lang?.toLowerCase()) {
+    case "typescript": return "ts";
+    case "python": return "py";
+    case "java": return "java";
+    default: return lang?.slice(0, 4) ?? "?";
+  }
+}
+
+// Map our language names to highlight.js language identifiers
+function hlLang(lang: string): string {
+  switch (lang?.toLowerCase()) {
+    case "typescript": return "typescript";
+    case "python": return "python";
+    case "java": return "java";
+    default: return "plaintext";
+  }
+}
+
+function CodeView({ artifact, projectId, onGenerateClick }: { artifact: any | null; projectId: string; onGenerateClick: () => void }) {
+  const [SyntaxHighlighter, setSyntaxHighlighter] = useState<any>(null);
+  const [hlStyle, setHlStyle] = useState<any>(null);
+
+  // Dynamically import to avoid SSR issues
+  useEffect(() => {
+    Promise.all([
+      import("react-syntax-highlighter"),
+      import("react-syntax-highlighter/dist/esm/styles/hljs/github"),
+    ]).then(([mod, styleMod]) => {
+      setSyntaxHighlighter(() => mod.Light);
+      setHlStyle(styleMod.default);
+    });
+  }, []);
+
+  if (!artifact) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
+        <Code2 className="size-8 opacity-30" />
+        <p>Select a file or generate code from a diagram</p>
+        <button onClick={onGenerateClick} className="text-primary underline text-xs">Generate Code</button>
+      </div>
+    );
+  }
+
+  const filePath = artifact.metadata?.filePath ?? "";
+  const lang = artifact.metadata?.language ?? "";
+  const sourceDiagramId = artifact.metadata?.sourceDiagramId ?? null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const files = (artifact.content?.files ?? {}) as Record<string, any>;
+  const fileContent: string = (filePath && (files[filePath] as any)?.content) ?? (Object.values(files)[0] as any)?.content ?? "";
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="flex-1 overflow-auto bg-[#f6f8fa]">
+        {SyntaxHighlighter && hlStyle ? (
+          <SyntaxHighlighter
+            language={hlLang(lang)}
+            style={hlStyle}
+            showLineNumbers
+            lineNumberStyle={{ color: "#94a3b8", minWidth: "2.5em", paddingRight: "1em", userSelect: "none" }}
+            customStyle={{ margin: 0, padding: "1.5rem", background: "#f6f8fa", fontSize: "0.8125rem", lineHeight: "1.6", minHeight: "100%" }}
+          >
+            {fileContent}
+          </SyntaxHighlighter>
+        ) : (
+          <pre className="min-h-full p-6 text-sm leading-relaxed text-zinc-800 font-mono whitespace-pre">
+            <code>{fileContent}</code>
+          </pre>
+        )}
+      </div>
+      {sourceDiagramId && (
+        <div className="shrink-0 border-t bg-background px-4 py-3">
+          <p className="mb-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">Traceability</p>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 py-1 text-xs text-foreground">
+            <Code2 className="size-3 shrink-0" />
+            Source diagram: {sourceDiagramId.slice(0, 8)}…
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -91,8 +91,9 @@ export async function generateAIObject<T>(
 }
 
 /**
- * Generate structured object using streaming
- * Parses JSON incrementally and calls callback for each complete object
+ * Generate structured object using streaming.
+ * Parses each requirement incrementally as its JSON object completes in the stream.
+ * Falls back to processing the full buffered response if incremental parsing fails.
  */
 export async function generateAIObjectStreaming<T>(
   taskType: TaskType,
@@ -107,8 +108,6 @@ export async function generateAIObjectStreaming<T>(
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
     messages.push({ role: "user", content: prompt });
 
-    // Collect the full streamed response before parsing — the incremental
-    // object-extraction approach was too fragile and caused parse errors.
     const stream = await openaiClient.chat.completions.create({
       model: "gpt-5.4-nano",
       messages,
@@ -118,26 +117,83 @@ export async function generateAIObjectStreaming<T>(
     });
 
     let fullContent = "";
+    // Track position inside the "requirements" array
+    let inRequirementsArray = false;
+    let depth = 0;
+    let objectStart = -1;
+    let processedCount = 0;
+    const failedItems: any[] = [];
+
     for await (const chunk of stream) {
-      fullContent += chunk.choices[0]?.delta?.content ?? "";
+      const delta = chunk.choices[0]?.delta?.content ?? "";
+      if (!delta) continue;
+
+      for (let ci = 0; ci < delta.length; ci++) {
+        const ch = delta[ci];
+        const pos = fullContent.length + ci;
+        const currentContent = fullContent + delta.slice(0, ci + 1);
+
+        // Detect entry into the requirements array
+        if (!inRequirementsArray) {
+          const soFar = fullContent + delta.slice(0, ci + 1);
+          if (/"requirements"\s*:\s*\[/.test(soFar) && depth === 0) {
+            inRequirementsArray = true;
+          }
+          continue;
+        }
+
+        if (ch === "{") {
+          if (depth === 0) objectStart = pos;
+          depth++;
+        } else if (ch === "}") {
+          depth--;
+          if (depth === 0 && objectStart !== -1) {
+            // We have a complete object — extract it
+            const combined = fullContent + delta.slice(0, ci + 1);
+            const objStr = combined.slice(objectStart, pos + 1);
+            try {
+              const item = JSON.parse(objStr);
+              processedCount++;
+              console.log(`[Requirement ${processedCount}] Parsed:`, item.title);
+              await onPartialObject(item);
+            } catch {
+              // Collect failed items for fallback processing
+              failedItems.push(objStr);
+            }
+            objectStart = -1;
+          } else if (depth < 0) {
+            // Exited the requirements array
+            inRequirementsArray = false;
+            depth = 0;
+          }
+        }
+      }
+
+      fullContent += delta;
     }
 
-    console.log("[AI Stream] Full response received, length:", fullContent.length);
+    console.log("[AI Stream] Complete —", processedCount, "requirements processed incrementally");
 
-    // Parse and validate the complete JSON once
-    const parsed = JSON.parse(fullContent);
-    const validated = schema.parse(parsed) as any;
-
-    // Stream each requirement to the callback so the UI updates progressively
-    const items: any[] = validated.requirements ?? [];
-    for (let i = 0; i < items.length; i++) {
-      console.log(`[Requirement ${i + 1}] Parsed:`, items[i].title);
-      await onPartialObject(items[i]);
+    // Parse the full response to get dependencies and validate schema
+    let validated: any;
+    try {
+      const parsed = JSON.parse(fullContent);
+      validated = schema.parse(parsed);
+    } catch (parseError) {
+      console.error("[AI Stream] Full response parse failed:", parseError);
+      throw parseError;
     }
 
-    console.log("[AI Stream] Complete —", items.length, "requirements processed");
+    // If any items failed incremental parsing, process them now from the full result
+    if (failedItems.length > 0 || processedCount === 0) {
+      const allItems: any[] = validated.requirements ?? [];
+      const remaining = allItems.slice(processedCount);
+      for (let i = 0; i < remaining.length; i++) {
+        console.log(`[Requirement ${processedCount + i + 1}] Parsed (fallback):`, remaining[i].title);
+        await onPartialObject(remaining[i]);
+      }
+    }
 
-    // Deliver the full result (includes dependencies etc.)
     if (onComplete) onComplete(validated as T);
   } catch (error) {
     console.error(`AI streaming failed for task ${taskType}`, error);

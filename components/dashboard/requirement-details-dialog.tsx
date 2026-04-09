@@ -86,8 +86,8 @@ export function RequirementDetailsDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-xl w-full max-h-[85vh] overflow-y-auto z-[200]">
-          <DialogHeader>
+        <DialogContent className="max-w-xl w-full max-h-[85vh] !flex flex-col z-[200]">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <span className="font-mono text-sm text-muted-foreground">{formData.req_id}</span>
               <span className="text-base font-semibold">{formData.title || "Untitled"}</span>
@@ -95,7 +95,7 @@ export function RequirementDetailsDialog({
             <DialogDescription>Edit requirement details and manage dependencies</DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="space-y-4 overflow-y-auto flex-1 min-h-0 pr-1 pb-1">
             {/* Title */}
             <div className="space-y-1.5">
               <Label htmlFor="title">Title</Label>
@@ -220,7 +220,7 @@ export function RequirementDetailsDialog({
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0 pt-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button onClick={handleSave}>Save Changes</Button>
           </DialogFooter>
@@ -332,15 +332,15 @@ function AddDependencyDialog({ open, onOpenChange, sourceRequirement, allRequire
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px] z-[200]">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-[480px] max-h-[85vh] !flex flex-col z-[200]">
+        <DialogHeader className="shrink-0">
           <DialogTitle>Add Dependency</DialogTitle>
           <DialogDescription>
             Link <span className="font-mono text-xs">{sourceRequirement.req_id}</span> to another requirement
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 overflow-y-auto flex-1 min-h-0 pr-1 pb-1">
           {/* Relationship type */}
           <div className="space-y-1.5">
             <Label>Relationship type</Label>
@@ -373,10 +373,10 @@ function AddDependencyDialog({ open, onOpenChange, sourceRequirement, allRequire
             ) : candidates.map((req) => (
               <button key={req.id} type="button"
                 onClick={() => handleSelect(req)}
-                className={`flex w-full items-center gap-3 px-3 py-2.5 text-left text-xs hover:bg-muted/40 transition-colors ${selected?.id === req.id ? "bg-primary/5" : ""}`}>
-                <span className="font-mono text-muted-foreground shrink-0">{req.req_id}</span>
+                className={`flex w-full items-center gap-3 px-3 py-2.5 text-left text-xs transition-colors ${selected?.id === req.id ? "bg-primary text-primary-foreground" : "hover:bg-muted/40"}`}>
+                <span className={`font-mono text-xs shrink-0 ${selected?.id === req.id ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{req.req_id}</span>
                 <span className="flex-1 truncate">{req.title}</span>
-                <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs ${req.priority === "high" ? "bg-red-100 text-red-700" : req.priority === "medium" ? "bg-yellow-100 text-yellow-700" : "bg-green-100 text-green-700"}`}>
+                <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs ${selected?.id === req.id ? "bg-white/20 text-primary-foreground" : req.priority === "high" ? "bg-red-100 text-red-700" : req.priority === "medium" ? "bg-yellow-100 text-yellow-700" : "bg-green-100 text-green-700"}`}>
                   {req.priority}
                 </span>
               </button>
@@ -394,7 +394,7 @@ function AddDependencyDialog({ open, onOpenChange, sourceRequirement, allRequire
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 pt-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={handleAdd} disabled={!selected || cycleWarning || saving}>
             {saving ? "Adding…" : "Add Dependency"}
