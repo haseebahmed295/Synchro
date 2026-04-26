@@ -5,7 +5,7 @@
 
 import { anthropic } from "@ai-sdk/anthropic";
 import { google } from "@ai-sdk/google";
-import { openai } from "@ai-sdk/openai";
+import { openai, createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 
 export type ModelProvider = "anthropic" | "google" | "openai" | "deepseek";
@@ -28,6 +28,11 @@ export interface ModelConfig {
   temperature: number;
 }
 
+const customDeepseekProvider = createOpenAI({
+  baseURL: "https://integrate.api.nvidia.com/v1",
+  apiKey: process.env.NVIDIA_API_KEY || process.env.OPENAI_API_KEY,
+});
+
 /**
  * Get the appropriate model for a given task type
  * Implements the multi-model strategy from requirements 31.1-31.5
@@ -47,9 +52,7 @@ export function getModelForTask(taskType: TaskType): LanguageModel {
         return openai(config.model);
 
       case "deepseek":
-        // DeepSeek support (requires custom OpenAI configuration)
-        // Set OPENAI_BASE_URL=https://api.deepseek.com in environment
-        return openai(config.model);
+        return customDeepseekProvider(config.model);
 
       default:
         throw new Error(`Unknown provider: ${config.provider}`);
@@ -65,11 +68,11 @@ export function getModelForTask(taskType: TaskType): LanguageModel {
  * Get model configuration based on task type
  */
 function getModelConfig(taskType: TaskType): ModelConfig {
-  // Use OpenAI GPT-5.4-nano for all tasks
+  // Use DeepSeek for all tasks
   return {
-    provider: "openai",
-    model: "gpt-5.4-nano",
-    maxTokens: 16000,
+    provider: "deepseek",
+    model: "deepseek-ai/deepseek-v4-flash",
+    maxTokens: 16384,
     temperature: taskType === "validation" ? 0.2 : taskType === "code-generation" ? 0.4 : 0.5,
   };
 }
@@ -78,20 +81,19 @@ function getModelConfig(taskType: TaskType): ModelConfig {
  * Fallback model when primary model is unavailable (Req 31.5)
  */
 function getFallbackModel(): LanguageModel {
-  console.warn("Using fallback model: GPT-5.4-nano");
-  return openai("gpt-5.4-nano");
+  console.warn("Using fallback model: deepseek-ai/deepseek-v4-flash");
+  return customDeepseekProvider("deepseek-ai/deepseek-v4-flash");
 }
 
 /**
  * Get fallback model for validation tasks
- * Uses GPT-4o as fallback
  */
 export function getValidationFallbackModel(): LanguageModel {
   try {
-    return openai("gpt-5.4-nano");
+    return customDeepseekProvider("deepseek-ai/deepseek-v4-flash");
   } catch (error) {
     console.error(
-      "Failed to initialize OpenAI model",
+      "Failed to initialize DeepSeek model",
       error,
     );
     return getFallbackModel();

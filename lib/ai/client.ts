@@ -1,6 +1,6 @@
 /**
  * AI Client
- * Provides high-level interface for AI model interactions
+ * Primary: OpenAI (gpt-4o). Fallback: NVIDIA DeepSeek endpoint.
  */
 
 import { generateText } from "ai";
@@ -12,11 +12,32 @@ import {
   type TaskType,
 } from "./models";
 
-// Create OpenAI client
+// Primary — OpenAI
 const openaiClient = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  // Using standard OpenAI endpoint
 });
+
+// Fallback — NVIDIA DeepSeek
+const nvidiaClient = new OpenAI({
+  baseURL: "https://integrate.api.nvidia.com/v1",
+  apiKey: process.env.NVIDIA_API_KEY,
+});
+
+const OPENAI_MODEL = "gpt-5-mini-2025-08-07"; 
+const NVIDIA_MODEL = "deepseek-ai/deepseek-v4-flash";
+
+/** Run fn with openaiClient first; if it throws, retry with nvidiaClient. */
+async function withFallback<T>(
+  fn: (client: OpenAI, model: string, isNvidia: boolean) => Promise<T>,
+): Promise<T> {  if (process.env.OPENAI_API_KEY) {
+    try {
+      return await fn(openaiClient, OPENAI_MODEL, false);
+    } catch (err) {
+      console.warn("[AI] OpenAI failed, falling back to NVIDIA:", (err as Error).message);
+    }
+  }
+  return fn(nvidiaClient, NVIDIA_MODEL, true);
+}
 
 /**
  * Generate text using the appropriate model for the task
@@ -26,27 +47,23 @@ export async function generateAIText(
   prompt: string,
   systemPrompt?: string,
 ): Promise<string> {
-  try {
-    // Use OpenAI GPT-4o
-    const messages: Array<{ role: "system" | "user"; content: string }> = [];
+  const messages: Array<{ role: "system" | "user"; content: string }> = [];
+  if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+  messages.push({ role: "user", content: prompt });
 
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
-
-    messages.push({ role: "user", content: prompt });
-
-    const completion = await openaiClient.chat.completions.create({
-      model: "gpt-5.4-nano",
+  const completion = await withFallback<{ choices: Array<{ message: { content: string } }> }>(
+    (client, model, isNvidia) =>
+    (client.chat.completions.create as any)({
+      model,
       messages,
-      temperature: taskType === "validation" ? 0.2 : taskType === "code-generation" ? 0.4 : 0.5,
-    });
+      ...(isNvidia ? {
+        temperature: taskType === "validation" ? 0.2 : taskType === "code-generation" ? 0.4 : 0.5,
+        extra_body: { chat_template_kwargs: { thinking: true, reasoning_effort: "high" } },
+      } : {}),
+    })
+  );
 
-    return completion.choices[0]?.message?.content || "";
-  } catch (error) {
-    console.error(`AI generation failed for task ${taskType}`, error);
-    throw error;
-  }
+  return completion.choices[0]?.message?.content || "";
 }
 
 /**
@@ -58,36 +75,29 @@ export async function generateAIObject<T>(
   schema: z.ZodSchema<T>,
   systemPrompt?: string,
 ): Promise<T> {
-  try {
-    // Use OpenAI GPT-4o for structured output
-    const messages: Array<{ role: "system" | "user"; content: string }> = [];
+  const messages: Array<{ role: "system" | "user"; content: string }> = [];
+  if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+  messages.push({ role: "user", content: prompt });
 
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
-
-    messages.push({ role: "user", content: prompt });
-
-    const completion = await openaiClient.chat.completions.create({
-      model: "gpt-5.4-nano",
+  const completion = await withFallback<{ choices: Array<{ message: { content: string } }> }>(
+    (client, model, isNvidia) =>
+    (client.chat.completions.create as any)({
+      model,
       messages,
       response_format: { type: "json_object" },
-      temperature: taskType === "validation" ? 0.2 : taskType === "code-generation" ? 0.4 : 0.5,
-    });
+      ...(isNvidia ? {
+        temperature: taskType === "validation" ? 0.2 : taskType === "code-generation" ? 0.4 : 0.5,
+        extra_body: { chat_template_kwargs: { thinking: true, reasoning_effort: "high" } },
+      } : {}),
+    })
+  );
 
-    const content = completion.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error("No response from AI model");
-    }
+  const content = completion.choices[0]?.message?.content;
+  if (!content) throw new Error("No response from AI model");
 
-    // Parse and validate the JSON response
-    const parsed = JSON.parse(content);
-    console.log("[AI Response]", JSON.stringify(parsed, null, 2));
-    return schema.parse(parsed) as T;
-  } catch (error) {
-    console.error(`AI object generation failed for task ${taskType}`, error);
-    throw error;
-  }
+  const parsed = JSON.parse(content);
+  console.log("[AI Response]", JSON.stringify(parsed, null, 2));
+  return schema.parse(parsed) as T;
 }
 
 /**
@@ -103,21 +113,36 @@ export async function generateAIObjectStreaming<T>(
   onPartialObject: (obj: any) => Promise<void>,
   onComplete?: (fullResult: T) => void,
 ): Promise<void> {
-  try {
-    const messages: Array<{ role: "system" | "user"; content: string }> = [];
-    if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-    messages.push({ role: "user", content: prompt });
+  const messages: Array<{ role: "system" | "user"; content: string }> = [];
+  if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+  messages.push({ role: "user", content: prompt });
 
-    const stream = await openaiClient.chat.completions.create({
-      model: "gpt-5.4-nano",
+  const temperature = taskType === "validation" ? 0.2 : taskType === "code-generation" ? 0.4 : 0.5;
+
+  // Try to get a stream — OpenAI first, NVIDIA fallback
+  let stream: any;
+  try {
+    if (!process.env.OPENAI_API_KEY) throw new Error("No OpenAI key");
+    stream = await openaiClient.chat.completions.create({
+      model: OPENAI_MODEL,
       messages,
       response_format: { type: "json_object" },
-      temperature: taskType === "validation" ? 0.2 : taskType === "code-generation" ? 0.4 : 0.5,
       stream: true,
     });
+  } catch (err) {
+    console.warn("[AI] OpenAI streaming failed, falling back to NVIDIA:", (err as Error).message);
+    stream = await (nvidiaClient.chat.completions.create as any)({
+      model: NVIDIA_MODEL,
+      messages,
+      response_format: { type: "json_object" },
+      temperature,
+      stream: true,
+      extra_body: { chat_template_kwargs: { thinking: true, reasoning_effort: "high" } },
+    });
+  }
 
+  try {
     let fullContent = "";
-    // Track position inside the "requirements" array
     let inRequirementsArray = false;
     let depth = 0;
     let objectStart = -1;

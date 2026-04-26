@@ -8,9 +8,13 @@ import {
   FileCode,
   LayoutTemplate,
   LogOut,
+  MoreHorizontal,
   Plus,
   RefreshCw,
+  Search,
+  Settings,
   Trash2,
+  Wand2,
 } from "lucide-react";
 import {
   Sidebar,
@@ -30,12 +34,18 @@ import {
 } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { DiagramCanvas } from "@/components/dashboard/diagram-canvas";
 import { CreateDiagramDialog } from "@/components/dashboard/create-diagram-dialog";
 import SyncSuggestionsPanel from "@/components/dashboard/sync-suggestions-panel";
 import RequirementsTable, { type Requirement } from "@/components/dashboard/requirements-table";
 import { RequirementDetailsDialog, type RequirementDetails } from "@/components/dashboard/requirement-details-dialog";
-import { TextToRequirementsDialog } from "@/components/dashboard/text-to-requirements-dialog";
+import { IdeaToRequirementsDialog } from "@/components/dashboard/idea-to-requirements-dialog";
 import { NodeLinksPanel } from "@/components/dashboard/node-links-panel";
 import { ProjectsDialog } from "@/components/dashboard/projects-dialog";
 import { GenerateCodeDialog } from "@/components/dashboard/generate-code-dialog";
@@ -47,6 +57,9 @@ import { computeLayout } from "@/lib/utils/diagram-layout";
 import { createRequirement, updateRequirement, deleteRequirement } from "@/lib/api/requirements";
 import { getLinksForProject, createLink, deleteLink, type TraceabilityLinkRow } from "@/lib/api/links";
 import { getDepsForProject, createDependency, deleteDependency, type RequirementDependency } from "@/lib/api/dependencies";
+import { recordChange } from "@/lib/api/change-log";
+import { usePipelineTrigger } from "@/lib/hooks/use-pipeline-trigger";
+import { loadSuggestions, clearSuggestions } from "@/lib/api/suggestions";
 import type { LinkType } from "@/lib/agents/types";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 
@@ -98,6 +111,8 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
   const router = useRouter();
   const supabase = createClient();
 
+  const { trigger: triggerPipeline } = usePipelineTrigger();
+
   // ── Project state ──
   const [projects, setProjects] = useState<Project[]>(initialProjects);
   const [selectedProject, setSelectedProject] = useState<Project | null>(initialProjects[0] ?? null);
@@ -130,6 +145,14 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
   const [reqSuggestions, setReqSuggestions] = useState<DiagramSuggestion[]>([]);
   const [loadingReqSuggestions, setLoadingReqSuggestions] = useState(false);
   const [selectedDiagramForReq, setSelectedDiagramForReq] = useState<string | null>(null);
+
+  // Load saved suggestions when diagram selection changes
+  useEffect(() => {
+    if (!selectedDiagramForReq) { setReqSuggestions([]); return; }
+    loadSuggestions(selectedDiagramForReq).then((saved) => {
+      if (saved.length > 0) { setReqSuggestions(saved); setShowReqSuggestions(true); }
+    }).catch(console.error);
+  }, [selectedDiagramForReq]);
 
   // ── Code state ──
   const [codeArtifacts, setCodeArtifacts] = useState<any[]>([]);
@@ -173,6 +196,8 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
         const parsed = (data || []).map(parseDiagramArtifact);
         setDiagrams(parsed);
         setSelectedDiagramId(parsed[0]?.id ?? null);
+        // Seed baseline so first persist after load doesn't log as a change
+        lastPersistedDiagramRef.current = parsed[0] ?? null;
         setDiagramsLoading(false);
       });
 
@@ -243,7 +268,10 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
     if (debouncedUpdates.size === 0) return;
     const run = async () => {
       for (const [id, update] of debouncedUpdates.entries()) {
-        try { await updateRequirement(id, update.field as any, update.value); } catch {}
+        try {
+          await updateRequirement(id, update.field as any, update.value);
+          if (selectedProject) triggerPipeline(id, selectedProject.id);
+        } catch {}
       }
       setPendingUpdates(new Map());
     };
@@ -258,27 +286,100 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
   }, [supabase, router]);
 
   // ── Diagram handlers ──
-  const persistDiagram = useCallback(async (diagram: Diagram) => {
-    await supabase.from("artifacts").update({
-      content: { diagram_metadata: { type: diagram.type, name: diagram.metadata?.name }, nodes: Object.fromEntries(diagram.nodes.map((n) => [n.id, n])), edges: Object.fromEntries(diagram.edges.map((e) => [e.id, e])) },
-      updated_at: new Date().toISOString(),
-    }).eq("id", diagram.id);
-  }, [supabase]);
+  // Debounced diagram persist — collapses rapid node/edge drag events into one write
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDiagramRef = useRef<Diagram | null>(null);
+  const lastPersistedDiagramRef = useRef<Diagram | null>(null);
 
-  const handleNodesChange = useCallback(async (updatedNodes: DiagramNode[]) => {
+  /** Returns true if the change is meaningful (not just position drag or layout metadata) */
+  const hasMeaningfulChange = useCallback((prev: Diagram | null, next: Diagram): boolean => {
+    if (!prev) return false; // first load — don't log, nothing changed yet
+
+    const prevNodeIds = new Set(prev.nodes.map((n) => n.id));
+    const nextNodeIds = new Set(next.nodes.map((n) => n.id));
+    const prevEdgeIds = new Set(prev.edges.map((e) => e.id));
+    const nextEdgeIds = new Set(next.edges.map((e) => e.id));
+
+    // Node/edge added or deleted
+    if (prevNodeIds.size !== nextNodeIds.size || prevEdgeIds.size !== nextEdgeIds.size) return true;
+    for (const id of prevNodeIds) if (!nextNodeIds.has(id)) return true;
+    for (const id of prevEdgeIds) if (!nextEdgeIds.has(id)) return true;
+
+    // Non-position node attribute changed (skip x/y position)
+    for (const nextNode of next.nodes) {
+      const prevNode = prev.nodes.find((n) => n.id === nextNode.id);
+      if (!prevNode) return true;
+      if (JSON.stringify(prevNode.data) !== JSON.stringify(nextNode.data)) return true;
+      if (prevNode.type !== nextNode.type) return true;
+    }
+
+    // Edge semantic attributes changed — exclude layout-computed fields
+    const EDGE_LAYOUT_FIELDS = new Set(["msgY", "order", "msgType", "id"]);
+    const stripLayoutFields = (e: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(e).filter(([k]) => !EDGE_LAYOUT_FIELDS.has(k)));
+
+    for (const nextEdge of next.edges) {
+      const prevEdge = prev.edges.find((e) => e.id === nextEdge.id);
+      if (!prevEdge) return true;
+      if (JSON.stringify(stripLayoutFields(prevEdge as any)) !== JSON.stringify(stripLayoutFields(nextEdge as any))) return true;
+    }
+
+    return false;
+  }, []);
+
+  const persistDiagram = useCallback((diagram: Diagram) => {
+    // Always update the pending ref so the latest state is flushed
+    pendingDiagramRef.current = diagram;
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+
+    persistTimerRef.current = setTimeout(async () => {
+      const d = pendingDiagramRef.current;
+      if (!d) return;
+      pendingDiagramRef.current = null;
+
+      const newContent = {
+        diagram_metadata: { type: d.type, name: d.metadata?.name },
+        nodes: Object.fromEntries(d.nodes.map((n) => [n.id, n])),
+        edges: Object.fromEntries(d.edges.map((e) => [e.id, e])),
+      };
+      await supabase.from("artifacts").update({
+        content: newContent,
+        updated_at: new Date().toISOString(),
+      }).eq("id", d.id);
+
+      // Only log if something meaningful changed (not just position drag)
+      const meaningful = hasMeaningfulChange(lastPersistedDiagramRef.current, d);
+      lastPersistedDiagramRef.current = d;
+
+      if (meaningful) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await recordChange({
+            artifact_id: d.id,
+            patch: { op: "replace", path: "/content", value: newContent },
+            applied_by: "user",
+            agent_type: user.id,
+          });
+          if (selectedProject) triggerPipeline(d.id, selectedProject.id);
+        }
+      }
+    }, 800);
+  }, [supabase, selectedProject, triggerPipeline, hasMeaningfulChange]);
+
+  const handleNodesChange = useCallback((updatedNodes: DiagramNode[]) => {
     const diagram = selectedDiagramRef.current;
     if (!diagram) return;
     const updated = { ...diagram, nodes: updatedNodes };
     setDiagrams((prev) => prev.map((d) => d.id === updated.id ? updated : d));
-    await persistDiagram(updated);
+    persistDiagram(updated);
   }, [persistDiagram]);
 
-  const handleEdgesChange = useCallback(async (updatedEdges: DiagramEdge[]) => {
+  const handleEdgesChange = useCallback((updatedEdges: DiagramEdge[]) => {
     const diagram = selectedDiagramRef.current;
     if (!diagram) return;
     const updated = { ...diagram, edges: updatedEdges };
     setDiagrams((prev) => prev.map((d) => d.id === updated.id ? updated : d));
-    await persistDiagram(updated);
+    persistDiagram(updated);
   }, [persistDiagram]);
 
   const handleRelayout = useCallback(async () => {
@@ -289,7 +390,7 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
     const updated = { ...diagram, nodes: relaidNodes };
     setDiagrams((prev) => prev.map((d) => d.id === updated.id ? updated : d));
     setLayoutVersion((v) => v + 1);
-    await persistDiagram(updated);
+    persistDiagram(updated);
   }, [persistDiagram]);
 
   const handleCreateDiagram = useCallback(async (name: string, type: string, syncWithRequirements: boolean) => {
@@ -361,10 +462,22 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
 
   const handleReqCreate = useCallback(async () => {
     if (!selectedProject) return;
+    // Optimistic: add placeholder immediately and open edit dialog
+    const tempId = `temp-${Date.now()}`;
+    const optimistic: RequirementDetails = { id: tempId, req_id: "...", title: "New Requirement", description: "", type: "functional", priority: "medium", status: "draft", links: [], tags: [] };
+    setRequirements((prev) => [...prev, optimistic]);
+    setEditingRequirement(optimistic);
+    setShowDetailsDialog(true);
+    // Save to DB in background, then swap temp id with real id
     try {
       const result = await createRequirement(selectedProject.id, userId, { title: "New Requirement", description: "", type: "functional", priority: "medium", status: "draft" });
-      setRequirements((prev) => [...prev, { id: result.id, req_id: result.content.req_id, title: result.content.title, type: result.content.type, priority: result.content.priority, status: result.content.status, description: result.content.description || "", links: result.content.links || [], tags: result.content.metadata?.tags || [] }]);
+      const real: RequirementDetails = { id: result.id, req_id: result.content.req_id, title: result.content.title, type: result.content.type, priority: result.content.priority, status: result.content.status, description: result.content.description || "", links: result.content.links || [], tags: result.content.metadata?.tags || [] };
+      setRequirements((prev) => prev.map((r) => r.id === tempId ? real : r));
+      setEditingRequirement((prev) => prev?.id === tempId ? real : prev);
     } catch (err) {
+      // Rollback optimistic entry
+      setRequirements((prev) => prev.filter((r) => r.id !== tempId));
+      setShowDetailsDialog(false);
       alert(`Failed: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
     }
   }, [selectedProject, userId]);
@@ -378,13 +491,73 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
     }
   }, []);
 
+  const handleGenerateFromIdea = useCallback(async (idea: string) => {
+    if (!selectedProject) return;
+    setIsGeneratingReqs(true);
+    setGenerationProgress(0);
+    try {
+      const response = await fetch("/api/analyst/ingest-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: idea, projectId: selectedProject.id }),
+      });
+      if (!response.ok) throw new Error("Failed to generate requirements");
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const lines = decoder.decode(value).split("\n");
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.type === "requirement") {
+                  setGenerationProgress(data.count);
+                  setRequirements((prev) => [...prev, { id: data.requirement.id, req_id: data.requirement.content.req_id, title: data.requirement.content.title, type: data.requirement.content.type, priority: data.requirement.content.priority, status: data.requirement.content.status, description: data.requirement.content.description || "", links: data.requirement.content.links || [], tags: data.requirement.content.metadata?.tags || [] }]);
+                } else if (data.type === "dependency") {
+                  setDeps((prev) => [...prev, data.dependency]);
+                }
+              } catch {}
+            }
+          }
+        }
+      }
+    } catch (err) {
+      alert(`Failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setIsGeneratingReqs(false);
+      setGenerationProgress(0);
+    }
+  }, [selectedProject]);
+
   const handleSaveReqDetails = useCallback(async (updated: RequirementDetails) => {
+    if (updated.id.startsWith("temp-")) return; // still saving to DB, skip
     try {
       const { data: current, error: fetchErr } = await supabase.from("artifacts").select("content, version").eq("id", updated.id).single();
       if (fetchErr) throw fetchErr;
-      const { error: updateErr } = await supabase.from("artifacts").update({ content: { ...current.content, title: updated.title, description: updated.description, type: updated.type, priority: updated.priority, status: updated.status, links: updated.links || [], metadata: { ...current.content.metadata, tags: updated.tags || [] } }, updated_at: new Date().toISOString() }).eq("id", updated.id).eq("version", current.version);
+      const newContent = { ...current.content, title: updated.title, description: updated.description, type: updated.type, priority: updated.priority, status: updated.status, links: updated.links || [], metadata: { ...current.content.metadata, tags: updated.tags || [] } };
+      const { error: updateErr } = await supabase.from("artifacts").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", updated.id).eq("version", current.version);
       if (updateErr) throw updateErr;
       setRequirements((prev) => prev.map((r) => r.id === updated.id ? updated : r));
+
+      // Record change for AI pipeline — diff changed fields
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const changedFields = (["title", "description", "type", "priority", "status"] as const).filter(
+          (f) => current.content[f] !== (updated as any)[f]
+        );
+        if (changedFields.length > 0) {
+          await recordChange({
+            artifact_id: updated.id,
+            patch: changedFields.map((f) => ({ op: "replace", path: `/content/${f}`, value: (updated as any)[f] })),
+            applied_by: "user",
+            agent_type: user.id,
+          });
+          if (selectedProject) triggerPipeline(updated.id, selectedProject.id);
+        }
+      }
     } catch (err) {
       alert(`Failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
@@ -511,7 +684,7 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
                     ) : (
                       diagrams.map((diagram) => (
                         <SidebarMenuItem key={diagram.id}>
-                          <SidebarMenuButton isActive={selectedDiagramId === diagram.id} onClick={() => setSelectedDiagramId(diagram.id)} className="pr-8">
+                          <SidebarMenuButton isActive={selectedDiagramId === diagram.id} onClick={() => { setSelectedDiagramId(diagram.id); lastPersistedDiagramRef.current = diagram; }} className="pr-8">
                             <LayoutTemplate className="size-4 shrink-0" />
                             <span className="truncate">{diagram.metadata?.name || `Diagram ${diagram.id.slice(0, 6)}`}</span>
                           </SidebarMenuButton>
@@ -601,12 +774,12 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
             </span>
 
             {/* View toggle */}
-            <div className="ml-4 flex items-center rounded-md border bg-muted/40 p-0.5 text-xs">
+            <div className="ml-4 flex items-center rounded-lg border border-border bg-muted/30 p-1 text-xs">
               {(["diagrams", "requirements", "code"] as View[]).map((v) => (
                 <button
                   key={v}
                   onClick={() => setView(v)}
-                  className={`rounded px-3 py-1 capitalize transition-colors ${view === v ? "bg-background shadow-sm font-medium" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`rounded-md px-3.5 py-1.5 capitalize transition-all duration-200 ${view === v ? "bg-background text-foreground shadow-sm font-medium" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
                 >
                   {v}
                 </button>
@@ -617,52 +790,77 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
             <div className="ml-auto flex items-center gap-2">
               {view === "diagrams" && selectedDiagram && (
                 <>
-                  <Button size="sm" variant="outline" onClick={handleRelayout} className="h-7 gap-1.5 text-xs">
-                    <RefreshCw className="size-3" />
-                    Re-layout
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={handleSyncDiagramToRequirements} disabled={loadingDiagramSuggestions} className="h-7 text-xs">
-                    {loadingDiagramSuggestions ? "Analyzing…" : "Sync to Requirements"}
-                  </Button>
-                  {requirements.length > 0 && (
-                    <Button size="sm" variant="outline" onClick={handleAuditLinks} disabled={isAuditingLinks} className="h-7 text-xs">
-                      {isAuditingLinks ? "Auditing…" : "Audit Links"}
-                    </Button>
-                  )}
                   {diagramSuggestions.length > 0 && (
-                    <Button size="sm" variant={showDiagramSuggestions ? "default" : "outline"} onClick={() => setShowDiagramSuggestions((v) => !v)} className="h-7 text-xs">
+                    <Button size="sm" variant={showDiagramSuggestions ? "default" : "outline"} onClick={() => setShowDiagramSuggestions((v) => !v)} className="h-8 text-xs font-medium bg-indigo-50/50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50 border-indigo-200 dark:border-indigo-800/50 transition-colors">
+                      <Wand2 className="size-3.5 mr-1.5" />
                       {showDiagramSuggestions ? "Hide" : `Suggestions (${diagramSuggestions.length})`}
                     </Button>
                   )}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" variant="outline" className="h-8 px-2">
+                        <MoreHorizontal className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuItem onClick={handleRelayout} className="text-xs py-2 cursor-pointer">
+                        <RefreshCw className="size-3.5 mr-2" />
+                        Re-layout Diagram
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleSyncDiagramToRequirements} disabled={loadingDiagramSuggestions} className="text-xs py-2 cursor-pointer">
+                        <RefreshCw className={`size-3.5 mr-2 ${loadingDiagramSuggestions ? "animate-spin" : ""}`} />
+                        Sync to Requirements
+                      </DropdownMenuItem>
+                      {requirements.length > 0 && (
+                        <DropdownMenuItem onClick={handleAuditLinks} disabled={isAuditingLinks} className="text-xs py-2 cursor-pointer">
+                          <Search className="size-3.5 mr-2" />
+                          Audit Links
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </>
-              )}              {view === "code" && (
-                <Button size="sm" onClick={() => setShowGenerateCodeDialog(true)} className="h-7 gap-1.5 text-xs">
-                  <Plus className="size-3" />
+              )}
+              {view === "code" && (
+                <Button size="sm" onClick={() => setShowGenerateCodeDialog(true)} className="h-8 gap-1.5 text-xs bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm">
+                  <Code2 className="size-3.5" />
                   Generate Code
                 </Button>
               )}
               {view === "requirements" && (
                 <>
-                  <Button size="sm" variant="outline" onClick={() => setShowTextToReqDialog(true)} className="h-7 text-xs">
-                    Convert Text
-                  </Button>
                   {diagrams.length > 0 && (
-                    <>
+                    <div className="flex items-center gap-2 mr-2">
                       <select
                         value={selectedDiagramForReq || ""}
                         onChange={(e) => setSelectedDiagramForReq(e.target.value)}
-                        className="h-7 rounded border border-input bg-background px-2 text-xs"
+                        className="h-8 rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
-                        <option value="">Select diagram…</option>
+                        <option value="">Select diagram to sync…</option>
                         {diagrams.map((d) => (
                           <option key={d.id} value={d.id}>{d.metadata?.name || `Diagram ${d.id.slice(0, 6)}`}</option>
                         ))}
                       </select>
-                      <Button size="sm" variant="outline" onClick={handleSyncReqToDiagram} disabled={loadingReqSuggestions || !selectedDiagramForReq} className="h-7 text-xs">
-                        {loadingReqSuggestions ? "Analyzing…" : "Sync to Diagram"}
+                      <Button size="sm" variant="outline" onClick={handleSyncReqToDiagram} disabled={loadingReqSuggestions || !selectedDiagramForReq} className="h-8 text-xs">
+                        {loadingReqSuggestions ? "Analyzing…" : "Sync"}
                       </Button>
-                    </>
+                    </div>
                   )}
+                  {reqSuggestions.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant={showReqSuggestions ? "default" : "outline"}
+                      onClick={() => setShowReqSuggestions((v) => !v)}
+                      className="h-8 text-xs font-medium bg-indigo-50/50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50 border-indigo-200 dark:border-indigo-800/50 transition-colors"
+                    >
+                      <Wand2 className="size-3.5 mr-1.5" />
+                      {showReqSuggestions ? "Hide" : `Suggestions (${reqSuggestions.length})`}
+                    </Button>
+                  )}
+                  <Button size="sm" onClick={() => setShowTextToReqDialog(true)} className="h-8 gap-1.5 text-xs bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm">
+                    <Plus className="size-3.5" />
+                    New Idea
+                  </Button>
                 </>
               )}
             </div>
@@ -726,6 +924,7 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
                     onEditDetails={(r) => { setEditingRequirement(r as RequirementDetails); setShowDetailsDialog(true); }}
                     onDelete={handleReqDelete}
                     onNavigateToNode={handleNavigateToNode}
+                    onGenerateFromIdea={handleGenerateFromIdea}
                   />
                 </div>
               ) : (
@@ -774,7 +973,11 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
                   <button onClick={() => setShowReqSuggestions(false)} className="text-muted-foreground hover:text-foreground text-xs">✕</button>
                 </div>
                 <div className="flex-1 overflow-y-auto">
-                  <SyncSuggestionsPanel suggestions={reqSuggestions} suggestionType="diagram" artifactId={selectedDiagramForReq} projectId={selectedProject!.id} onSuggestionApplied={() => { setReqSuggestions([]); setShowReqSuggestions(false); }} />
+                  <SyncSuggestionsPanel suggestions={reqSuggestions} suggestionType="diagram" artifactId={selectedDiagramForReq} projectId={selectedProject!.id} onSuggestionApplied={() => {
+                    setShowReqSuggestions(false);
+                    if (selectedProject) clearSuggestions(selectedProject.id, selectedDiagramForReq).catch(console.error);
+                    setReqSuggestions([]);
+                  }} />
                 </div>
               </div>
             )}
@@ -807,7 +1010,7 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
         onDependencyCreated={(dep) => setDeps((prev) => [...prev, dep])}
         onDependencyDeleted={(depId) => setDeps((prev) => prev.filter((d) => d.id !== depId))}
       />
-      <TextToRequirementsDialog
+      <IdeaToRequirementsDialog
         projectId={selectedProject?.id ?? ""}
         open={showTextToReqDialog}
         onOpenChange={setShowTextToReqDialog}

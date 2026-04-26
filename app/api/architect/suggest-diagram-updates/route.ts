@@ -9,6 +9,7 @@ import { ArchitectAgent } from "@/lib/agents/architect";
 import type { JSONPatch } from "@/lib/agents/json-patch";
 import { initializeAI } from "@/lib/ai";
 import { createClient } from "@/lib/supabase/server";
+import { saveSuggestions } from "@/lib/api/suggestions";
 
 // Initialize AI on module load
 initializeAI();
@@ -97,7 +98,15 @@ export async function POST(request: NextRequest) {
 
     const requirements =
       requirementArtifacts?.map((artifact) => artifact.content) || [];
-    const diagram = diagramArtifact.content;
+
+    // DB stores nodes/edges as objects keyed by id — convert to arrays for the agent
+    const rawContent = diagramArtifact.content as any;
+    const diagram = {
+      id: diagramArtifact.id,
+      type: rawContent.diagram_metadata?.type ?? "class",
+      nodes: Object.values(rawContent.nodes ?? {}),
+      edges: Object.values(rawContent.edges ?? {}),
+    } as any;
 
     // Create Architect agent and generate suggestions
     const architect = new ArchitectAgent();
@@ -110,6 +119,11 @@ export async function POST(request: NextRequest) {
     );
 
     const analysisTime = Date.now() - startTime;
+
+    // Persist suggestions so they survive page refresh
+    if (suggestions.length > 0) {
+      await saveSuggestions(projectId, diagramId, suggestions, user.id);
+    }
 
     return NextResponse.json({
       success: true,

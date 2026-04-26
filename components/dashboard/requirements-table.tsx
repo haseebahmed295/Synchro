@@ -6,7 +6,7 @@
  */
 
 import React, { useCallback, useMemo, useState } from "react";
-import { AlertTriangle, GitBranch } from "lucide-react";
+import { AlertTriangle, GitBranch, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { TraceabilityLinkRow } from "@/lib/api/links";
@@ -35,6 +35,7 @@ interface RequirementsTableProps {
   onEditDetails: (requirement: Requirement) => void;
   onDelete: (id: string) => void;
   onNavigateToNode: (diagramId: string, nodeId: string) => void;
+  onGenerateFromIdea: (idea: string) => void;
 }
 
 type SortField = keyof Requirement;
@@ -51,6 +52,7 @@ export default function RequirementsTable({
   onEditDetails,
   onDelete,
   onNavigateToNode,
+  onGenerateFromIdea,
 }: RequirementsTableProps) {
   const [editingCell, setEditingCell] = useState<{ id: string; field: keyof Requirement } | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -58,6 +60,7 @@ export default function RequirementsTable({
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [groupBy, setGroupBy] = useState<GroupBy>("none");
   const [filters, setFilters] = useState({ type: "", priority: "", status: "" });
+  const [ideaText, setIdeaText] = useState("");
 
   const handleCellEdit = useCallback((id: string, field: keyof Requirement, value: string) => {
     onUpdate(id, field, value);
@@ -287,7 +290,27 @@ export default function RequirementsTable({
           </thead>
           <tbody className="divide-y divide-zinc-200 bg-white dark:divide-zinc-800 dark:bg-zinc-950">
             {filteredAndSorted.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-zinc-600 dark:text-zinc-400">No requirements found</td></tr>
+              <tr>
+                <td colSpan={7} className="px-4 py-12 text-center">
+                  <div className="mx-auto max-w-md space-y-4">
+                    <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">No requirements yet. Describe your idea and let AI generate them.</p>
+                    <textarea
+                      value={ideaText}
+                      onChange={(e) => setIdeaText(e.target.value)}
+                      placeholder="e.g. I want to build a task management app where users can create projects, assign tasks, set deadlines and get email notifications..."
+                      className="w-full min-h-[120px] rounded-lg border border-input bg-input/30 px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 resize-none"
+                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && ideaText.trim()) { onGenerateFromIdea(ideaText); setIdeaText(""); } }}
+                    />
+                    <div className="flex gap-2 justify-center">
+                      <Button onClick={() => { if (ideaText.trim()) { onGenerateFromIdea(ideaText); setIdeaText(""); } }} disabled={!ideaText.trim()} className="gap-1.5">
+                        <Sparkles className="size-4" />
+                        Generate Requirements
+                      </Button>
+                      <Button variant="outline" onClick={onCreate}>Add Manually</Button>
+                    </div>
+                  </div>
+                </td>
+              </tr>
             ) : grouped.map(({ label, rows }) => (
               <React.Fragment key={label ?? "ungrouped"}>
                 {label && (

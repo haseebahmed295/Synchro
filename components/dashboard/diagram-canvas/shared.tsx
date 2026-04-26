@@ -31,14 +31,12 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
 
   return (
     <>
-      <div style={{ position: "fixed", inset: 0, zIndex: 999 }} onClick={onClose} />
-      <div style={{
-        position: "fixed", left: x, top: y, zIndex: 1000,
-        background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8,
-        boxShadow: "0 4px 16px rgba(0,0,0,0.12)", minWidth: 180, overflow: "hidden",
-        fontFamily: "system-ui, sans-serif", fontSize: 13,
-      }}>
-        <div style={{ padding: "6px 12px", borderBottom: "1px solid #f3f4f6", color: "#6b7280", fontSize: 11 }}>
+      <div className="fixed inset-0 z-[999]" onClick={onClose} />
+      <div
+        className="fixed z-[1000] min-w-[180px] overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-md text-[13px]"
+        style={{ left: x, top: y }}
+      >
+        <div className="px-3 py-1.5 border-b border-border text-muted-foreground text-[11px]">
           {target.kind === "node" ? "Node" : "Edge"}: {target.label || target.id.slice(0, 12)}
         </div>
 
@@ -46,25 +44,19 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
           <>
             <button
               onClick={() => { onAddChild(target.id, "executionEnvironment", "JVM"); onClose(); }}
-              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#065f46" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#d1fae5")}
-              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              className="block w-full text-left px-3.5 py-2 hover:bg-accent text-emerald-600 dark:text-emerald-400"
             >
               ⚙️ Add Exec Environment
             </button>
             <button
               onClick={() => { onAddChild(target.id, "component", "MyService"); onClose(); }}
-              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#4c1d95" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#ede9fe")}
-              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              className="block w-full text-left px-3.5 py-2 hover:bg-accent text-violet-600 dark:text-violet-400"
             >
               🧩 Add Component
             </button>
             <button
               onClick={() => { onAddChild(target.id, "artifact", "app.jar"); onClose(); }}
-              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#374151" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              className="block w-full text-left px-3.5 py-2 hover:bg-accent"
             >
               📄 Add Artifact
             </button>
@@ -74,17 +66,13 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
           <>
             <button
               onClick={() => { onAddChild(target.id, "component", "MyService"); onClose(); }}
-              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#4c1d95" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#ede9fe")}
-              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              className="block w-full text-left px-3.5 py-2 hover:bg-accent text-violet-600 dark:text-violet-400"
             >
               🧩 Add Component
             </button>
             <button
               onClick={() => { onAddChild(target.id, "artifact", "app.jar"); onClose(); }}
-              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#374151" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              className="block w-full text-left px-3.5 py-2 hover:bg-accent"
             >
               📄 Add Artifact
             </button>
@@ -95,17 +83,13 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
           <>
             <button
               onClick={() => { onEditClassMembers(target.id, target.label, "attributes"); onClose(); }}
-              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#1e40af" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              className="block w-full text-left px-3.5 py-2 hover:bg-accent text-blue-600 dark:text-blue-400"
             >
               📋 Edit attributes
             </button>
             <button
               onClick={() => { onEditClassMembers(target.id, target.label, "methods"); onClose(); }}
-              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#1e40af" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              className="block w-full text-left px-3.5 py-2 hover:bg-accent text-blue-600 dark:text-blue-400"
             >
               ⚙️ Edit methods
             </button>
@@ -114,9 +98,7 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
         {target.kind === "node" && onStartConnect && (
           <button
             onClick={() => { onStartConnect(target.id); onClose(); }}
-            style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#2563eb" }}
-            onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-            onMouseLeave={e => (e.currentTarget.style.background = "none")}
+            className="block w-full text-left px-3.5 py-2 hover:bg-accent text-blue-600 dark:text-blue-400"
           >
             🔗 Connect from here
           </button>
@@ -124,18 +106,14 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
 
         <button
           onClick={() => { onEditLabel(target.kind, target.id, target.label); onClose(); }}
-          style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#111827" }}
-          onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-          onMouseLeave={e => (e.currentTarget.style.background = "none")}
+          className="block w-full text-left px-3.5 py-2 hover:bg-accent"
         >
           ✏️ Edit label
         </button>
         {isErdNode && onEditColumns && (
           <button
             onClick={() => { onEditColumns(target.id, target.label); onClose(); }}
-            style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#111827" }}
-            onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-            onMouseLeave={e => (e.currentTarget.style.background = "none")}
+            className="block w-full text-left px-3.5 py-2 hover:bg-accent"
           >
             🗂️ Edit columns
           </button>
@@ -144,17 +122,13 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
           <>
             <button
               onClick={() => { onEditInterfaces(target.id, target.label, "provided"); onClose(); }}
-              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#065f46" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#f0fdf4")}
-              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              className="block w-full text-left px-3.5 py-2 hover:bg-accent text-emerald-600 dark:text-emerald-400"
             >
               ○ Edit provided interfaces
             </button>
             <button
               onClick={() => { onEditInterfaces(target.id, target.label, "required"); onClose(); }}
-              style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#92400e" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#fffbeb")}
-              onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              className="block w-full text-left px-3.5 py-2 hover:bg-accent text-amber-600 dark:text-amber-400"
             >
               ◑ Edit required interfaces
             </button>
@@ -162,9 +136,7 @@ export function ContextMenu({ x, y, target, onDelete, onEditLabel, onEditColumns
         )}
         <button
           onClick={() => { onDelete(target.kind, target.id); onClose(); }}
-          style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 14px", background: "none", border: "none", cursor: "pointer", color: "#dc2626" }}
-          onMouseEnter={e => (e.currentTarget.style.background = "#fef2f2")}
-          onMouseLeave={e => (e.currentTarget.style.background = "none")}
+          className="block w-full text-left px-3.5 py-2 hover:bg-destructive/10 text-destructive"
         >
           🗑️ Delete
         </button>
@@ -185,27 +157,19 @@ export function EditLabelDialog({ current, onSave, onClose }: EditLabelDialogPro
   const [value, setValue] = useState(current);
   return (
     <>
-      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", zIndex: 1001 }} onClick={onClose} />
-      <div style={{
-        position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
-        background: "#fff", borderRadius: 10, padding: 24, zIndex: 1002,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.18)", minWidth: 320,
-        fontFamily: "system-ui, sans-serif",
-      }}>
-        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12, color: "#111827" }}>Edit Label</div>
+      <div className="fixed inset-0 bg-black/50 z-[1001] backdrop-blur-sm" onClick={onClose} />
+      <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-background text-foreground rounded-lg p-6 z-[1002] shadow-lg min-w-[320px]">
+        <div className="font-semibold text-[15px] mb-3">Edit Label</div>
         <input
           autoFocus
           value={value}
           onChange={e => setValue(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") onSave(value); if (e.key === "Escape") onClose(); }}
-          style={{
-            width: "100%", padding: "8px 10px", border: "1.5px solid #d1d5db",
-            borderRadius: 6, fontSize: 13, outline: "none", boxSizing: "border-box",
-          }}
+          className="w-full px-3 py-2 border border-input bg-transparent rounded-md text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
-        <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
-          <button onClick={onClose} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", fontSize: 13 }}>Cancel</button>
-          <button onClick={() => onSave(value)} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#6366f1", color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Save</button>
+        <div className="flex gap-2 mt-4 justify-end">
+          <button onClick={onClose} className="px-3.5 py-1.5 rounded-md border border-input hover:bg-accent text-[13px]">Cancel</button>
+          <button onClick={() => onSave(value)} className="px-3.5 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 text-[13px] font-semibold">Save</button>
         </div>
       </div>
     </>
@@ -269,56 +233,41 @@ export function ColumnEditorDialog({ tableName, columns, onSave, onClose, mode =
 
   return (
     <>
-      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 1001 }} onClick={onClose} />
-      <div style={{
-        position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
-        background: "#fff", borderRadius: 10, padding: 24, zIndex: 1002,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.18)", width: 460, maxHeight: "80vh",
-        display: "flex", flexDirection: "column", fontFamily: "system-ui, sans-serif",
-      }}>
-        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4, color: "#111827" }}>
+      <div className="fixed inset-0 bg-black/50 z-[1001] backdrop-blur-sm" onClick={onClose} />
+      <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-background text-foreground rounded-lg p-6 z-[1002] shadow-lg w-[460px] max-h-[80vh] flex flex-col">
+        <div className="font-bold text-[15px] mb-1">
           {title}
         </div>
-        <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 14 }}>
+        <div className="text-[11px] text-muted-foreground mb-4">
           {helperText}
         </div>
-        <div style={{ overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="overflow-y-auto flex-1 flex flex-col gap-1.5">
           {rows.map((row, i) => (
-            <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <div key={i} className="flex gap-1.5 items-center">
               <input
                 autoFocus={i === rows.length - 1 && rows.length > 1}
                 value={row}
                 onChange={(e) => update(i, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(e, i)}
                 placeholder={placeholder(i)}
-                style={{
-                  flex: 1, padding: "6px 10px", border: "1.5px solid #d1d5db",
-                  borderRadius: 6, fontSize: 12, outline: "none", fontFamily: "monospace",
-                }}
+                className="flex-1 px-2.5 py-1.5 border border-input bg-transparent rounded-md text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring font-mono"
               />
               <button
                 onClick={() => removeRow(i)}
-                style={{
-                  width: 26, height: 26, borderRadius: 6, border: "1px solid #fca5a5",
-                  background: "#fff", cursor: "pointer", color: "#dc2626", fontSize: 14,
-                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                }}
+                className="w-7 h-7 rounded-md border border-destructive/30 hover:bg-destructive/10 text-destructive text-sm flex items-center justify-center shrink-0"
               >×</button>
             </div>
           ))}
         </div>
         <button
           onClick={addRow}
-          style={{
-            marginTop: 10, padding: "6px 0", borderRadius: 6, border: "1.5px dashed #d1d5db",
-            background: "#f9fafb", cursor: "pointer", fontSize: 12, color: "#6b7280", width: "100%",
-          }}
+          className="mt-2.5 py-1.5 rounded-md border-2 border-dashed border-input hover:bg-accent text-xs text-muted-foreground w-full transition-colors"
         >
           {addLabel}
         </button>
-        <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
-          <button onClick={onClose} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", fontSize: 13 }}>Cancel</button>
-          <button onClick={handleSave} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#6366f1", color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Save</button>
+        <div className="flex gap-2 mt-4 justify-end">
+          <button onClick={onClose} className="px-3.5 py-1.5 rounded-md border border-input hover:bg-accent text-[13px]">Cancel</button>
+          <button onClick={handleSave} className="px-3.5 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 text-[13px] font-semibold">Save</button>
         </div>
       </div>
     </>

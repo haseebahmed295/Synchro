@@ -5,6 +5,7 @@
  */
 
 import { createClient } from "@/lib/supabase/client";
+import { recordChange } from "@/lib/api/change-log";
 
 export interface RequirementContent {
   req_id: string; // REQ_UNIQUE_ID
@@ -161,6 +162,17 @@ export async function updateRequirement(
   if (updateError) {
     console.error("Error updating requirement:", updateError);
     throw updateError;
+  }
+
+  // Record change for AI pipeline
+  const { data: { user } } = await supabase.auth.getUser();
+  if (user) {
+    await recordChange({
+      artifact_id: artifactId,
+      patch: { op: "replace", path: `/content/${field}`, value },
+      applied_by: "user",
+      agent_type: user.id,
+    });
   }
 }
 

@@ -99,13 +99,17 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const diagram = diagramArtifact.content;
+      const rawContent = diagramArtifact.content as any;
+
+      // DB stores nodes/edges as id-keyed objects — work with arrays, save back as maps
+      let nodes: any[] = Object.values(rawContent.nodes ?? {});
+      let edges: any[] = Object.values(rawContent.edges ?? {});
       let updated = false;
 
       // Apply the suggestion based on action type
       switch (diagramSuggestion.action) {
         case "add_node":
-          diagram.nodes.push({
+          nodes.push({
             id: diagramSuggestion.target_id,
             type: diagramSuggestion.data.type || "class",
             position: diagramSuggestion.data.position || { x: 100, y: 100 },
@@ -119,28 +123,19 @@ export async function POST(request: NextRequest) {
           break;
 
         case "remove_node":
-          diagram.nodes = diagram.nodes.filter(
-            (n: any) => n.id !== diagramSuggestion.target_id,
-          );
-          diagram.edges = diagram.edges.filter(
-            (e: any) =>
-              e.source !== diagramSuggestion.target_id &&
-              e.target !== diagramSuggestion.target_id,
+          nodes = nodes.filter((n) => n.id !== diagramSuggestion.target_id);
+          edges = edges.filter(
+            (e) => e.source !== diagramSuggestion.target_id && e.target !== diagramSuggestion.target_id,
           );
           updated = true;
           break;
 
         case "update_node": {
-          const nodeIndex = diagram.nodes.findIndex(
-            (n: any) => n.id === diagramSuggestion.target_id,
-          );
+          const nodeIndex = nodes.findIndex((n) => n.id === diagramSuggestion.target_id);
           if (nodeIndex !== -1) {
-            diagram.nodes[nodeIndex] = {
-              ...diagram.nodes[nodeIndex],
-              data: {
-                ...diagram.nodes[nodeIndex].data,
-                ...diagramSuggestion.data,
-              },
+            nodes[nodeIndex] = {
+              ...nodes[nodeIndex],
+              data: { ...nodes[nodeIndex].data, ...diagramSuggestion.data },
             };
             updated = true;
           }
@@ -148,7 +143,7 @@ export async function POST(request: NextRequest) {
         }
 
         case "add_edge":
-          diagram.edges.push({
+          edges.push({
             id: diagramSuggestion.target_id,
             source: diagramSuggestion.data.source,
             target: diagramSuggestion.data.target,
@@ -159,19 +154,23 @@ export async function POST(request: NextRequest) {
           break;
 
         case "remove_edge":
-          diagram.edges = diagram.edges.filter(
-            (e: any) => e.id !== diagramSuggestion.target_id,
-          );
+          edges = edges.filter((e) => e.id !== diagramSuggestion.target_id);
           updated = true;
           break;
       }
 
+      // Rebuild content in DB format (id-keyed maps)
+      const updatedContent = {
+        ...rawContent,
+        nodes: Object.fromEntries(nodes.map((n) => [n.id, n])),
+        edges: Object.fromEntries(edges.map((e) => [e.id, e])),
+      };
+
       if (updated) {
-        // Update diagram in database with OCC
         const { data: updatedArtifact, error: updateError } = await supabase
           .from("artifacts")
           .update({
-            content: diagram,
+            content: updatedContent,
             version: diagramArtifact.version + 1,
             updated_at: new Date().toISOString(),
           })

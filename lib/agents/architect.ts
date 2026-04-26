@@ -827,22 +827,23 @@ Edges: ${currentDiagram.edges.map((e) => `${e.source} -> ${e.target} (${e.type})
 Suggest diagram updates that maintain consistency with the requirement change. Return a JSON array of suggestions.`;
 
     try {
+      // Accept all field naming conventions the AI may return
+      const SuggestionItemSchema = z.object({
+        action: z.enum(["add_node", "remove_node", "add_edge", "remove_edge", "update_node"]).optional(),
+        type: z.enum(["add_node", "remove_node", "add_edge", "remove_edge", "update_node"]).optional(),
+        target_id: z.string().optional(),
+        // AI sometimes returns target as a string, sometimes as an object {node_id, property, edge, ...}
+        target: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
+        data: z.record(z.string(), z.any()).optional(),
+        properties: z.record(z.string(), z.any()).optional(),
+        details: z.record(z.string(), z.any()).optional(),
+        suggested_value: z.any().optional(),
+        reasoning: z.string(),
+        confidence: z.number().min(0).max(1),
+      });
+
       const SuggestionsSchema = z.object({
-        suggestions: z.array(
-          z.object({
-            action: z.enum([
-              "add_node",
-              "remove_node",
-              "add_edge",
-              "remove_edge",
-              "update_node",
-            ]),
-            target_id: z.string(),
-            data: z.record(z.string(), z.any()),
-            reasoning: z.string(),
-            confidence: z.number().min(0).max(1),
-          }),
-        ),
+        suggestions: z.array(SuggestionItemSchema),
       });
 
       const result = await generateAIObject(
@@ -852,13 +853,32 @@ Suggest diagram updates that maintain consistency with the requirement change. R
         systemPrompt,
       );
 
-      return result.suggestions.map((s) => ({
-        action: s.action,
-        target_id: s.target_id,
-        data: s.data,
-        reasoning: s.reasoning,
-        confidence: s.confidence,
-      }));
+      return result.suggestions
+        .filter((s) => s.confidence >= 0.3)
+        .map((s) => {
+          const action = s.action ?? s.type;
+
+          // Normalize target — may be string or object with node_id/edge/node/id
+          const rawTarget = s.target_id ?? s.target;
+          const target_id: string | undefined =
+            typeof rawTarget === "string"
+              ? rawTarget
+              : typeof rawTarget === "object" && rawTarget !== null
+                ? String((rawTarget as any).node_id ?? (rawTarget as any).edge ?? (rawTarget as any).node ?? (rawTarget as any).id ?? "")
+                : (s.details as any)?.node ?? (s.details as any)?.edge;
+
+          // Merge all data fields — include suggested_value if present
+          const data = {
+            ...(s.data ?? {}),
+            ...(s.properties ?? {}),
+            ...(s.details ?? {}),
+            ...(s.suggested_value !== undefined ? { value: s.suggested_value } : {}),
+          };
+
+          if (!action || !target_id) return null;
+          return { action, target_id, data, reasoning: s.reasoning, confidence: s.confidence };
+        })
+        .filter((s): s is NonNullable<typeof s> => s !== null);
     } catch (error) {
       console.error("Failed to suggest diagram updates", error);
       throw new Error(
