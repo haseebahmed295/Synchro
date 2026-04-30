@@ -632,10 +632,47 @@ export function AppShell({ initialProjects, userEmail, userId }: AppShellProps) 
     }
   }, [selectedDiagram, selectedProject, requirements]);
 
-  const handleSyncReqToDiagram = useCallback(async () => {    if (!selectedDiagramForReq) { alert("Select a diagram first"); return; }
+  const handleSyncReqToDiagram = useCallback(async () => {
+    if (!selectedDiagramForReq) { alert("Select a diagram first"); return; }
+    if (!selectedProject) return;
     setLoadingReqSuggestions(true);
     try {
-      const res = await fetch("/api/architect/suggest-diagram-updates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requirementDelta: { op: "replace", path: "/requirements/0/title", value: "Updated" }, diagramId: selectedDiagramForReq, projectId: selectedProject?.id }) });
+      // Fetch most recent user change for any requirement in this project
+      const supabaseClient = createClient();
+      const reqIds = requirements.map((r) => r.id);
+
+      let delta: object | null = null;
+
+      if (reqIds.length > 0) {
+        const { data: recentChanges } = await supabaseClient
+          .from("change_log")
+          .select("patch, artifact_id, applied_at")
+          .in("artifact_id", reqIds)
+          .eq("applied_by", "user")
+          .order("applied_at", { ascending: false })
+          .limit(1);
+
+        if (recentChanges && recentChanges.length > 0) {
+          const raw = recentChanges[0].patch;
+          // patch may be a single op or array — unwrap
+          delta = Array.isArray(raw) ? raw[0] : raw;
+        }
+      }
+
+      // Fallback: send a synthetic patch summarising current requirements
+      if (!delta || typeof (delta as any).op !== "string") {
+        delta = {
+          op: "replace",
+          path: "/requirements",
+          value: requirements.map((r) => ({ id: r.id, title: r.title, type: r.type, priority: r.priority, status: r.status })),
+        };
+      }
+
+      const res = await fetch("/api/architect/suggest-diagram-updates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requirementDelta: delta, diagramId: selectedDiagramForReq, projectId: selectedProject.id }),
+      });
       if (!res.ok) throw new Error((await res.json()).error || "Failed");
       const data = await res.json();
       setReqSuggestions(data.suggestions || []);

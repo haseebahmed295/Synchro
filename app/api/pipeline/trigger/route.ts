@@ -62,7 +62,6 @@ export async function POST(request: NextRequest) {
 
     // Route to appropriate agent based on artifact type
     if (artifact.type === "requirement") {
-      // Requirement changed → ask Architect to suggest diagram updates
       const { data: diagrams } = await supabase
         .from("artifacts")
         .select("id, content")
@@ -75,13 +74,30 @@ export async function POST(request: NextRequest) {
         .eq("project_id", projectId)
         .eq("type", "requirement");
 
+      // Unwrap: patch may be a single op object or an array of ops
+      const rawPatch = patches[0];
+      const delta = Array.isArray(rawPatch) ? rawPatch[0] : rawPatch;
+
+      // Validate delta has required fields before calling agent
+      if (!delta || typeof (delta as any).op !== "string" || typeof (delta as any).path !== "string") {
+        return NextResponse.json({ message: "No valid patch delta to process", results: [] });
+      }
+
       const architect = new ArchitectAgent();
       const allSuggestions = [];
 
       for (const diagram of diagrams ?? []) {
+        const rawContent = diagram.content as any;
+        const diagramForAgent = {
+          id: diagram.id,
+          type: rawContent.diagram_metadata?.type ?? "class",
+          nodes: Object.values(rawContent.nodes ?? {}),
+          edges: Object.values(rawContent.edges ?? {}),
+        } as any;
+
         const suggestions = await architect.suggestDiagramUpdates(
-          patches[0], // most recent patch as the delta
-          diagram.content,
+          delta as any,
+          diagramForAgent,
           (requirements ?? []).map((r) => r.content),
         );
         if (suggestions.length > 0) {

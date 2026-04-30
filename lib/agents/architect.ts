@@ -832,11 +832,12 @@ Suggest diagram updates that maintain consistency with the requirement change. R
         action: z.enum(["add_node", "remove_node", "add_edge", "remove_edge", "update_node"]).optional(),
         type: z.enum(["add_node", "remove_node", "add_edge", "remove_edge", "update_node"]).optional(),
         target_id: z.string().optional(),
-        // AI sometimes returns target as a string, sometimes as an object {node_id, property, edge, ...}
         target: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
+        node_id: z.string().optional(),   // AI sometimes uses node_id directly
         data: z.record(z.string(), z.any()).optional(),
         properties: z.record(z.string(), z.any()).optional(),
         details: z.record(z.string(), z.any()).optional(),
+        changes: z.record(z.string(), z.any()).optional(), // AI sometimes uses changes
         suggested_value: z.any().optional(),
         reasoning: z.string(),
         confidence: z.number().min(0).max(1),
@@ -859,7 +860,7 @@ Suggest diagram updates that maintain consistency with the requirement change. R
           const action = s.action ?? s.type;
 
           // Normalize target — may be string or object with node_id/edge/node/id
-          const rawTarget = s.target_id ?? s.target;
+          const rawTarget = s.target_id ?? s.target ?? s.node_id;
           const target_id: string | undefined =
             typeof rawTarget === "string"
               ? rawTarget
@@ -867,10 +868,11 @@ Suggest diagram updates that maintain consistency with the requirement change. R
                 ? String((rawTarget as any).node_id ?? (rawTarget as any).edge ?? (rawTarget as any).node ?? (rawTarget as any).id ?? "")
                 : (s.details as any)?.node ?? (s.details as any)?.edge;
 
-          // Merge all data fields — include suggested_value if present
+          // Merge all data fields
           const data = {
             ...(s.data ?? {}),
             ...(s.properties ?? {}),
+            ...(s.changes ?? {}),
             ...(s.details ?? {}),
             ...(s.suggested_value !== undefined ? { value: s.suggested_value } : {}),
           };

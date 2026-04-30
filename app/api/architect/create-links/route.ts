@@ -108,15 +108,36 @@ export async function POST(request: NextRequest) {
     // Extract data — keep a map from content req_id → artifact UUID for link resolution
     const contentIdToArtifactId = new Map<string, string>();
     for (const artifact of requirementArtifacts) {
+      // Map by artifact UUID
+      contentIdToArtifactId.set(artifact.id, artifact.id);
+      // Map by req_id display value (e.g. "SYCN-3")
       if (artifact.content?.req_id) {
         contentIdToArtifactId.set(artifact.content.req_id, artifact.id);
       }
-      // Also map by artifact UUID directly in case AI returns UUIDs
-      contentIdToArtifactId.set(artifact.id, artifact.id);
+      // Map by content.id (temp ID used during AI generation e.g. "temp_3")
+      if (artifact.content?.id) {
+        contentIdToArtifactId.set(artifact.content.id, artifact.id);
+      }
+      // Map by title as last-resort fuzzy key
+      if (artifact.content?.title) {
+        contentIdToArtifactId.set(artifact.content.title, artifact.id);
+      }
     }
 
-    const requirements = requirementArtifacts.map((artifact) => artifact.content);
-    const diagram = diagramArtifact.content;
+    const requirements = requirementArtifacts.map((artifact) => ({
+      ...artifact.content,
+      // Ensure id is the artifact UUID so the agent prompt uses resolvable IDs
+      id: artifact.id,
+    }));
+
+    // DB stores nodes/edges as id-keyed objects — convert to arrays for the agent
+    const rawContent = diagramArtifact.content as any;
+    const diagram = {
+      id: diagramArtifact.id,
+      type: rawContent.diagram_metadata?.type ?? "class",
+      nodes: Object.values(rawContent.nodes ?? {}),
+      edges: Object.values(rawContent.edges ?? {}),
+    } as any;
 
     // Create Architect agent and generate traceability links
     const architect = new ArchitectAgent();
@@ -151,9 +172,24 @@ export async function POST(request: NextRequest) {
         })
         .filter((l): l is NonNullable<typeof l> => l !== null);
 
+      // Deduplicate by (source_id, target_id, link_type) — keep highest confidence per group
+      // since the unique constraint covers those three columns
+      const deduped = new Map<string, typeof links[0]>();
+      for (const link of links) {
+        const key = `${link.source_id}|${link.target_id}|${link.link_type}`;
+        const existing = deduped.get(key);
+        if (!existing || link.confidence > existing.confidence) {
+          deduped.set(key, link);
+        }
+      }
+      const dedupedLinks = Array.from(deduped.values());
+
       const { data: insertedLinks, error: linksError } = await supabase
         .from("traceability_links")
-        .upsert(links, { ignoreDuplicates: true })
+        .upsert(dedupedLinks, {
+          onConflict: "source_id,target_id,link_type",
+          ignoreDuplicates: false,
+        })
         .select();
 
       if (linksError) {
@@ -168,7 +204,7 @@ export async function POST(request: NextRequest) {
         success: true,
         traceabilityLinks,
         insertedLinks,
-        count: links.length,
+        count: dedupedLinks.length,
         analysisTime,
       });
     }

@@ -97,6 +97,20 @@ export async function generateAIObject<T>(
 
   const parsed = JSON.parse(content);
   console.log("[AI Response]", JSON.stringify(parsed, null, 2));
+  // Normalize: if AI returns {} or omits suggestions key, default to empty array
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.suggestions === undefined) {
+    parsed.suggestions = [];
+  }
+  // Filter out non-actionable suggestion types (e.g. "no_change") and normalize field names
+  if (Array.isArray(parsed.suggestions)) {
+    parsed.suggestions = parsed.suggestions
+      .filter((s: any) => s.type !== "no_change" && s.action !== "no_change")
+      .map((s: any) => ({
+        ...s,
+        // Normalize reason → reasoning
+        reasoning: s.reasoning ?? s.reason ?? s.recommendation ?? "",
+      }));
+  }
   return schema.parse(parsed) as T;
 }
 
